@@ -1,0 +1,49 @@
+{
+  "name": "@samebase/alchemy-convex",
+  "version": "0.1.0",
+  "description": "Community Convex provider for Alchemy v2: projects, deploy keys, environment variables, and a deploy step",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/samebase/alchemy-convex.git"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "vp fmt --check && vp lint && pnpm run typecheck && vp test --run",
+    "typecheck": "tsc --noEmit",
+    "test": "vp test --run",
+    "test:live": "ALCHEMY_CONVEX_LIVE=1 vp test --run test/live",
+    "format": "vp fmt",
+    "lint": "vp lint"
+  },
+  "dependencies": {
+    "@convex-dev/platform": "0.1.11"
+  },
+  "devDependencies": {
+    "@effect/platform-node": "4.0.0",
+    "@types/node": "^24.0.0",
+    "alchemy": "2.0.0-beta.80",
+    "convex": "^1.45.0",
+    "effect": "4.0.0",
+    "typescript": "^5.9.0",
+    "vite-plus": "0.3.0",
+    "vitest": "^4.0.0"
+  },
+  "peerDependencies": {
+    "@effect/platform-node": "^4.0.0",
+    "alchemy": "2.0.0-beta.80",
+    "effect": "^4.0.0"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@11.18.0"
+}

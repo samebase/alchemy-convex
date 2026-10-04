@@ -1,0 +1,6 @@
+{
+  "environmentVariables": {
+    "JWKS": "REDACTED",
+    "JWT_PRIVATE_KEY": "REDACTED"
+  }
+}
