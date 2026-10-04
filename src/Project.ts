@@ -121,15 +121,17 @@ export const ProjectProvider = () =>
       return {
         stables: ["projectId", "slug", "teamId"],
 
-        diff: Effect.fn(function* ({ olds, news }) {
-          if (!isResolved(news)) return undefined;
+        diff: ({ olds, news }) => {
+          if (!isResolved(news)) return Effect.succeed(undefined);
           const changed =
             olds.team !== news.team ||
             olds.name !== news.name ||
             olds.deploymentRegion !== news.deploymentRegion ||
             olds.deploymentType !== news.deploymentType;
-          return changed ? ({ action: "replace" } as const) : ({ action: "noop" } as const);
-        }),
+          return Effect.succeed(
+            changed ? ({ action: "replace" } as const) : ({ action: "noop" } as const),
+          );
+        },
 
         read: Effect.fn(function* ({ olds, output }) {
           if (output !== undefined) {
