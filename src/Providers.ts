@@ -3,7 +3,10 @@
 import * as Provider from "alchemy/Provider";
 import * as Layer from "effect/Layer";
 import { type Credentials, fromConfig } from "./Credentials.ts";
+import { DeployKey, DeployKeyProvider } from "./DeployKey.ts";
+import { EnvironmentVariable, EnvironmentVariableProvider } from "./EnvironmentVariable.ts";
 import { ManagementApiLive } from "./ManagementApi.ts";
+import { PreviewDeployKey, PreviewDeployKeyProvider } from "./PreviewDeployKey.ts";
 import { Project, ProjectProvider } from "./Project.ts";
 
 export class Providers extends Provider.ProviderCollection<Providers>()("Convex") {}
@@ -13,8 +16,18 @@ export class Providers extends Provider.ProviderCollection<Providers>()("Convex"
  * default lookup (`CONVEX_ACCESS_TOKEN`, then the Convex CLI login).
  */
 export const providers = (credentials: Layer.Layer<Credentials> = fromConfig()) =>
-  Layer.effect(Providers, Provider.collection([Project])).pipe(
-    Layer.provide(Layer.mergeAll(ProjectProvider())),
+  Layer.effect(
+    Providers,
+    Provider.collection([Project, DeployKey, PreviewDeployKey, EnvironmentVariable]),
+  ).pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        ProjectProvider(),
+        DeployKeyProvider(),
+        PreviewDeployKeyProvider(),
+        EnvironmentVariableProvider(),
+      ),
+    ),
     Layer.provide(ManagementApiLive()),
     Layer.provide(credentials),
     Layer.orDie,
