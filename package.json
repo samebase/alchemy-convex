@@ -8,13 +8,17 @@
     "url": "git+https://github.com/samebase/alchemy-convex.git"
   },
   "files": [
+    "lib",
     "src",
     "README.md",
     "LICENSE"
   ],
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./lib/index.d.ts",
+      "import": "./lib/index.js"
+    }
   },
   "scripts": {
     "check": "vp fmt --check && vp lint && pnpm run typecheck && vp test --run",
@@ -22,7 +26,9 @@
     "test": "vp test --run",
     "test:live": "ALCHEMY_CONVEX_LIVE=1 vp test --run test/live",
     "format": "vp fmt",
-    "lint": "vp lint"
+    "lint": "vp lint",
+    "build": "rm -rf lib && tsc -p tsconfig.build.json",
+    "prepack": "pnpm run build"
   },
   "dependencies": {
     "@convex-dev/platform": "0.1.11"
