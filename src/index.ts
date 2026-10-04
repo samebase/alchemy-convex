@@ -7,6 +7,13 @@ export {
   fromToken,
 } from "./Credentials.ts";
 export {
+  Deploy,
+  type DeployAttributes,
+  deployArgs,
+  type DeployProps,
+  parseDeployOutput,
+} from "./Deploy.ts";
+export {
   DeployKey,
   type DeployKeyAction,
   type DeployKeyAttributes,
