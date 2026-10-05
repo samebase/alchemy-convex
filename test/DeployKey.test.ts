@@ -1,9 +1,10 @@
 import { readFileSync } from "node:fs";
+import { State } from "alchemy/State";
 import * as Test from "alchemy/Test/Vitest";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import {
   CreatedDeployKey,
   createTrackedKey,
@@ -14,6 +15,7 @@ import {
   keysListedAs,
   ListedKey,
   requestedKeyName,
+  secretToDelete,
 } from "../src/DeployKey.ts";
 import * as Convex from "../src/index.ts";
 import { FakeConvex } from "./fakeConvex.ts";
@@ -219,6 +221,28 @@ describe("createTrackedKey", () => {
   });
 });
 
+describe("secretToDelete", () => {
+  const { deployKey } = Schema.decodeUnknownSync(CreatedDeployKey)(
+    fixture("deployment_create_deploy_key.json"),
+  );
+
+  it("returns the secret of a key with a verified id", async () => {
+    expect(
+      await Effect.runPromise(
+        secretToDelete({ keyId: recorded.id, secret: Redacted.make(deployKey) }, "key"),
+      ),
+    ).toBe(deployKey);
+  });
+
+  it("keeps a key from 0.1.x state, which has no id, because its secret can be an OAuth token", async () => {
+    expect(
+      await Effect.runPromise(
+        secretToDelete({ keyId: undefined, secret: Redacted.make(deployKey) }, "key"),
+      ),
+    ).toBeUndefined();
+  });
+});
+
 describe("Convex.DeployKey through the engine", () => {
   const { test } = Test.make({
     providers: Convex.providers(Convex.fromToken(Redacted.make("test-token"))),
@@ -260,6 +284,30 @@ describe("Convex.DeployKey through the engine", () => {
         { id: Redacted.value(both.aKey) },
       ]);
       expect(fake.keys.get(deployment)?.map((key) => key.name)).toEqual([both.b]);
+    }),
+  );
+
+  test.provider("does not delete a key from 0.1.x state, which has no key id", (stack) =>
+    Effect.gen(function* () {
+      const fake = new FakeConvex().install();
+      yield* stack.deploy(
+        Effect.gen(function* () {
+          const key = yield* Convex.DeployKey("Key", { deployment, name: "ci" });
+          return { name: key.uniqueName };
+        }),
+      );
+      // Rewrite the state row as 0.1.x wrote it: no keyId.
+      yield* Effect.gen(function* () {
+        const store = yield* yield* State;
+        const at = { stack: stack.name, stage: stack.stage, fqn: "Key" };
+        const row = yield* store.get(at);
+        assert(row !== undefined && "attr" in row && row.attr !== undefined, "no state row");
+        yield* store.set({ ...at, value: { ...row, attr: { ...row.attr, keyId: undefined } } });
+      }).pipe(Effect.provide(stack.state));
+      const from = fake.sent.length;
+      yield* stack.destroy();
+      expect(deleteCalls(fake, from)).toEqual([]);
+      expect(fake.keys.get(deployment)?.length).toBe(1);
     }),
   );
 

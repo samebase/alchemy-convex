@@ -18,6 +18,8 @@
 // - With an OAuth token as the Management API credential, Convex returns
 //   that token as the "new" key. The provider never stores, revokes, or
 //   deletes such a key: the create fails with DeployKeyIsCredential.
+// - Delete runs only for a key with a `keyId` in state. A 0.1.x key, which
+//   has none, stays in Convex with a warning.
 // A key cannot change after creation, so every property change is a replacement.
 import { createHash } from "node:crypto";
 import { Resource } from "alchemy";
@@ -31,7 +33,6 @@ import {
   absentAsUndefined,
   type ConvexApiError,
   ManagementApi,
-  type ManagementApiService,
   retryIdempotentWrite,
 } from "./ManagementApi.ts";
 import type { Providers } from "./Providers.ts";
@@ -181,29 +182,27 @@ export const createTrackedKey = (options: {
 
 /**
  * The secret to send to a delete call, or undefined when a delete is not
- * safe: state has no secret, or the secret is the Management API credential
- * (state written by 0.1.x under an OAuth token). Then the key stays, and a
- * warning names it.
+ * safe. Only a key with a `keyId` in state is known to be a new key that
+ * this resource owns: createTrackedKey found exactly one new listed key, and
+ * the secret was not the credential. State from 0.1.x has no `keyId`, and its
+ * secret can be an OAuth token that Convex returned as a key, so a delete
+ * could revoke that OAuth token. Such a key stays, and a warning names it.
  */
 export const secretToDelete = (
-  api: ManagementApiService,
-  secret: Redacted.Redacted<string> | undefined,
+  key: {
+    readonly keyId: number | undefined;
+    readonly secret: Redacted.Redacted<string> | undefined;
+  },
   label: string,
 ) =>
   Effect.gen(function* () {
-    if (!Redacted.isRedacted(secret)) {
+    if (key.keyId === undefined || !Redacted.isRedacted(key.secret)) {
       yield* Effect.logWarning(
-        `${label} has no secret in state, so Alchemy does not delete it. Delete it in the Convex dashboard.`,
+        `${label} has no verified key id and secret in state (state from 0.1.x, for example), so Alchemy does not delete it. Delete it in the Convex dashboard.`,
       );
       return undefined;
     }
-    if (yield* api.isCredentialToken(Redacted.value(secret))) {
-      yield* Effect.logWarning(
-        `${label} is the Management API credential itself, so Alchemy does not delete it: a delete would revoke the credential.`,
-      );
-      return undefined;
-    }
-    return Redacted.value(secret);
+    return Redacted.value(key.secret);
   });
 
 export interface DeployKeyProps {
@@ -321,8 +320,7 @@ export const DeployKeyProvider = () =>
           // Only the secret names this key alone: 0.1.x state can hold the
           // listed name of another resource's key.
           const secret = yield* secretToDelete(
-            api,
-            output.deployKey,
+            { keyId: output.keyId, secret: output.deployKey },
             `Convex.DeployKey "${output.uniqueName}" on ${output.deployment}`,
           );
           if (secret === undefined) return;

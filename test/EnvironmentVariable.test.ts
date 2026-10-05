@@ -129,6 +129,36 @@ describe("Convex.EnvironmentVariable through the engine", () => {
     }),
   );
 
+  test.provider("retries a create after a conflict only while the name is still free", (stack) =>
+    Effect.gen(function* () {
+      const fake = new FakeConvex().install();
+      const conflict = fixture("deployment_update_environment_variables_conflict.json");
+      fake.scripted.set(UPDATE, [
+        {
+          status: 503,
+          body: conflict,
+          meanwhile: () => fake.variables.set(deployment, { SITE_URL: "other writer" }),
+        },
+      ]);
+      const refused = yield* Effect.flip(stack.deploy(variable("SITE_URL").pipe(Effect.as({}))));
+      expect(refused).toMatchObject({ _tag: "OwnedBySomeoneElse" });
+      expect(fake.variables.get(deployment)).toEqual({ SITE_URL: "other writer" });
+      expect(fake.lines().filter((line) => line === UPDATE)).toEqual([UPDATE]);
+    }),
+  );
+
+  test.provider("retries a create after a conflict when the name is still free", (stack) =>
+    Effect.gen(function* () {
+      const fake = new FakeConvex().install();
+      fake.scripted.set(UPDATE, [
+        { status: 503, body: fixture("deployment_update_environment_variables_conflict.json") },
+      ]);
+      yield* stack.deploy(variable("SITE_URL").pipe(Effect.as({})));
+      expect(fake.variables.get(deployment)).toEqual({ SITE_URL: "new value" });
+      expect(fake.lines().filter((line) => line === UPDATE)).toEqual([UPDATE, UPDATE]);
+    }),
+  );
+
   test.provider("refuses to overwrite an existing variable after a rename", (stack) =>
     Effect.gen(function* () {
       const fake = new FakeConvex().install();

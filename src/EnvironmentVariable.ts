@@ -39,30 +39,38 @@ export const findVariable = (
   Object.hasOwn(list.environmentVariables, name) ? { deployment, name } : undefined;
 
 /**
- * Sets one variable, or removes it when `value` is null. The deployment
- * answers 200 with an empty body, so this reads no response data. The call
- * sets a value, so it runs again after a write conflict or a 5xx answer, for
- * example when another resource writes a variable of the same deployment at
- * the same time.
+ * One attempt to set one variable, or to remove it when `value` is null. The
+ * deployment answers 200 with an empty body, so this reads no response data.
+ */
+const writeVariable = (
+  deployment: string,
+  deployKey: Redacted.Redacted<string>,
+  name: string,
+  value: string | Redacted.Redacted<string> | null,
+) =>
+  settleVoid("update environment variables", () =>
+    createDeploymentClient(deployment, Redacted.value(deployKey)).POST(
+      "/update_environment_variables",
+      {
+        body: {
+          changes: [{ name, value: Redacted.isRedacted(value) ? Redacted.value(value) : value }],
+        },
+      },
+    ),
+  );
+
+/**
+ * Sets one variable, or removes it when `value` is null. The call sets a
+ * value, so it runs again after a write conflict or a 5xx answer, for example
+ * when another resource writes a variable of the same deployment at the same
+ * time. Use it only where the variable is already ours to set.
  */
 export const updateVariable = (
   deployment: string,
   deployKey: Redacted.Redacted<string>,
   name: string,
   value: string | Redacted.Redacted<string> | null,
-) =>
-  retryIdempotentWrite(
-    settleVoid("update environment variables", () =>
-      createDeploymentClient(deployment, Redacted.value(deployKey)).POST(
-        "/update_environment_variables",
-        {
-          body: {
-            changes: [{ name, value: Redacted.isRedacted(value) ? Redacted.value(value) : value }],
-          },
-        },
-      ),
-    ),
-  );
+) => retryIdempotentWrite(writeVariable(deployment, deployKey, name, value));
 
 /** GET https://<deployment>.convex.cloud/api/v1/list_environment_variables */
 export const EnvironmentVariableList = Schema.Struct({
@@ -139,20 +147,35 @@ export const EnvironmentVariableProvider = () =>
         }),
 
         reconcile: Effect.fn(function* ({ fqn, news, output }) {
-          if (output === undefined) {
+          const write = writeVariable(news.deployment, news.deployKey, news.name, news.value);
+          if (output !== undefined || (yield* shouldAdopt(fqn))) {
+            // In state, or adopted: the variable is ours to set.
+            yield* retryIdempotentWrite(write);
+          } else {
             // No state, for example after a replacement: the engine did not
             // read this name in plan. Overwriting a variable that exists loses
-            // its value, so that needs adoption.
-            const existing = yield* readVariable(api, news.deployment, news.deployKey, news.name);
-            if (existing !== undefined && !(yield* shouldAdopt(fqn))) {
-              return yield* new OwnedBySomeoneElse({
-                message: `Environment variable ${news.name} already exists on deployment ${news.deployment}. Re-run with --adopt to take it over and overwrite its value, or use a different name.`,
-                resourceType: EnvironmentVariable.Type,
-                physicalName: news.name,
-              });
-            }
+            // its value, so that needs adoption. Each attempt checks first, so
+            // a retry after a write conflict never overwrites a variable that
+            // another writer created in the meantime.
+            yield* retryIdempotentWrite(
+              Effect.gen(function* () {
+                const existing = yield* readVariable(
+                  api,
+                  news.deployment,
+                  news.deployKey,
+                  news.name,
+                );
+                if (existing !== undefined) {
+                  return yield* new OwnedBySomeoneElse({
+                    message: `Environment variable ${news.name} already exists on deployment ${news.deployment}. Re-run with --adopt to take it over and overwrite its value, or use a different name.`,
+                    resourceType: EnvironmentVariable.Type,
+                    physicalName: news.name,
+                  });
+                }
+                yield* write;
+              }),
+            );
           }
-          yield* updateVariable(news.deployment, news.deployKey, news.name, news.value);
           return { deployment: news.deployment, name: news.name };
         }),
 

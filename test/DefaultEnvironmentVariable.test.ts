@@ -116,6 +116,36 @@ describe("Convex.DefaultEnvironmentVariable through the engine", () => {
     providers: Convex.providers(Convex.fromToken(Redacted.make("test-token"))),
   });
 
+  test.provider("retries a create after a conflict only while the name is still free", (stack) =>
+    Effect.gen(function* () {
+      const fake = new FakeConvex().install();
+      fake.scripted.set(UPDATE, [
+        {
+          status: 503,
+          body: fixture("deployment_update_environment_variables_conflict.json"),
+          meanwhile: () =>
+            fake.defaults.push({
+              projectId: PROJECT_ID,
+              name: PREVIEW_ONLY,
+              deploymentType: "preview",
+            }),
+        },
+      ]);
+      const refused = yield* Effect.flip(
+        stack.deploy(
+          Convex.DefaultEnvironmentVariable("Default", {
+            projectId: PROJECT_ID,
+            name: PREVIEW_ONLY,
+            deploymentType: "preview",
+            value: "new value",
+          }).pipe(Effect.as({})),
+        ),
+      );
+      expect(refused).toMatchObject({ _tag: "OwnedBySomeoneElse" });
+      expect(fake.lines().filter((line) => line === UPDATE)).toEqual([UPDATE]);
+    }),
+  );
+
   test.provider("overwrites a default that is not in state only with adoption", (stack) =>
     Effect.gen(function* () {
       const fake = new FakeConvex().install();

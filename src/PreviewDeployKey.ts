@@ -141,8 +141,7 @@ export const PreviewDeployKeyProvider = () =>
           // Only the secret names this key alone: 0.1.x state can hold the
           // listed name of another resource's key.
           const secret = yield* secretToDelete(
-            api,
-            output.previewDeployKey,
+            { keyId: output.keyId, secret: output.previewDeployKey },
             `Convex.PreviewDeployKey "${output.uniqueName}" in project ${output.projectId}`,
           );
           if (secret === undefined) return;

@@ -17,9 +17,10 @@ wrong deploy key, or overwrite an environment variable.
 - `Convex.DeployKey` and `Convex.PreviewDeployKey` request a name that is unique to each resource:
   the `name` prop, a dash, and 12 hex characters of a hash of the resource identity. They store
   the numeric key id, delete only by the secret, and fail with `DeployKeyRecoveryRequired` when
-  the key list does not show exactly one key with the requested name. Keys created by 0.1 keep
-  working. A key that is the OAuth credential itself fails with `DeployKeyIsCredential` and is
-  never kept or deleted.
+  the key list does not show exactly one key with the requested name. A key that is the OAuth
+  credential itself fails with `DeployKeyIsCredential` and is never kept or deleted. Keys created
+  by 0.1 keep working, but 0.2 does not delete them: delete them in the Convex dashboard when you
+  remove or replace them.
 - `Convex.EnvironmentVariable` and `Convex.DefaultEnvironmentVariable` overwrite an existing value
   that is not in state only with `--adopt`. Their writes run again after a write conflict or a
   5xx answer.

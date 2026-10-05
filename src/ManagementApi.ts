@@ -143,18 +143,18 @@ export const isRetryableWriteError = (error: ConvexApiError): boolean =>
   error.status >= 500;
 
 /**
- * Runs an idempotent write again after a retryable error: at most four more
- * attempts, with exponential backoff from 100 ms and jitter. Other errors
- * fail at once, and so does the last retryable error. Use it only for a
- * write that has the same result when it runs twice, such as setting a
- * value or deleting by id. Never for a create.
+ * Runs an idempotent write again after a retryable Convex error: at most
+ * four more attempts, with exponential backoff from 100 ms and jitter. Other
+ * errors fail at once, and so does the last retryable error. Use it only for
+ * a write that has the same result when it runs twice, such as setting a
+ * value or deleting by id. Never for a create that does not check first.
  */
-export const retryIdempotentWrite = <A, R>(
-  effect: Effect.Effect<A, ConvexApiError, R>,
-): Effect.Effect<A, ConvexApiError, R> =>
+export const retryIdempotentWrite = <A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E, R> =>
   effect.pipe(
     Effect.retry({
-      while: isRetryableWriteError,
+      while: (error: E) => error instanceof ConvexApiError && isRetryableWriteError(error),
       times: 4,
       schedule: Schedule.exponential("100 millis").pipe(Schedule.jittered),
     }),

@@ -63,6 +63,29 @@ export const listDefaults = (
     )
     .pipe(Effect.map((body) => Schema.decodeUnknownSync(DefaultEnvironmentVariableList)(body)));
 
+/** One attempt to set one default, or to remove it when `value` is null. */
+const writeDefault = (
+  api: ManagementApiService,
+  projectId: number,
+  name: string,
+  deploymentType: DeploymentType,
+  value: string | Redacted.Redacted<string> | null,
+) =>
+  api.requestVoid("update default environment variables", (client) =>
+    client.POST("/projects/{project_id}/update_default_environment_variables", {
+      params: { path: { project_id: projectId } },
+      body: {
+        changes: [
+          {
+            name,
+            deploymentType,
+            value: Redacted.isRedacted(value) ? Redacted.value(value) : value,
+          },
+        ],
+      },
+    }),
+  );
+
 /**
  * Sets one default, or removes it when `value` is null. Convex answers 200
  * with an empty body, so this reads no response data. The call sets a value,
@@ -75,23 +98,7 @@ export const updateDefault = (
   name: string,
   deploymentType: DeploymentType,
   value: string | Redacted.Redacted<string> | null,
-) =>
-  retryIdempotentWrite(
-    api.requestVoid("update default environment variables", (client) =>
-      client.POST("/projects/{project_id}/update_default_environment_variables", {
-        params: { path: { project_id: projectId } },
-        body: {
-          changes: [
-            {
-              name,
-              deploymentType,
-              value: Redacted.isRedacted(value) ? Redacted.value(value) : value,
-            },
-          ],
-        },
-      }),
-    ),
-  );
+) => retryIdempotentWrite(writeDefault(api, projectId, name, deploymentType, value));
 
 /** Attributes of the default, or undefined when the default or the project is absent. */
 const readDefault = (
@@ -172,25 +179,41 @@ export const DefaultEnvironmentVariableProvider = () =>
         }),
 
         reconcile: Effect.fn(function* ({ fqn, news, output }) {
-          if (output === undefined) {
+          const write = writeDefault(
+            api,
+            news.projectId,
+            news.name,
+            news.deploymentType,
+            news.value,
+          );
+          if (output !== undefined || (yield* shouldAdopt(fqn))) {
+            // In state, or adopted: the default is ours to set.
+            yield* retryIdempotentWrite(write);
+          } else {
             // No state, for example after a replacement: the engine did not
             // read this name in plan. Overwriting a default that exists loses
-            // its value, so that needs adoption.
-            const existing = yield* readDefault(
-              api,
-              news.projectId,
-              news.name,
-              news.deploymentType,
+            // its value, so that needs adoption. Each attempt checks first, so
+            // a retry after a write conflict never overwrites a default that
+            // another writer created in the meantime.
+            yield* retryIdempotentWrite(
+              Effect.gen(function* () {
+                const existing = yield* readDefault(
+                  api,
+                  news.projectId,
+                  news.name,
+                  news.deploymentType,
+                );
+                if (existing !== undefined) {
+                  return yield* new OwnedBySomeoneElse({
+                    message: `Project ${news.projectId} already has a ${news.deploymentType} default environment variable ${news.name}. Re-run with --adopt to take it over and overwrite its value, or use a different name.`,
+                    resourceType: DefaultEnvironmentVariable.Type,
+                    physicalName: news.name,
+                  });
+                }
+                yield* write;
+              }),
             );
-            if (existing !== undefined && !(yield* shouldAdopt(fqn))) {
-              return yield* new OwnedBySomeoneElse({
-                message: `Project ${news.projectId} already has a ${news.deploymentType} default environment variable ${news.name}. Re-run with --adopt to take it over and overwrite its value, or use a different name.`,
-                resourceType: DefaultEnvironmentVariable.Type,
-                physicalName: news.name,
-              });
-            }
           }
-          yield* updateDefault(api, news.projectId, news.name, news.deploymentType, news.value);
           return {
             projectId: news.projectId,
             name: news.name,

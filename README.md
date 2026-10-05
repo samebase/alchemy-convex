@@ -132,6 +132,9 @@ replace, or overwrite your data by accident:
 Upgrade from 0.1: state from 0.1 records the policy `destroy` for each project. Run
 `alchemy deploy` one time with 0.2 while the stack still declares the project. That deploy records
 `retain`. Do this before you remove a project from the stack or run `alchemy destroy`.
+Deploy keys from 0.1 state keep working, but 0.2 does not delete them: their state cannot show that
+the secret is a new key and not an OAuth token. When you remove or replace such a key, delete it in
+the Convex dashboard.
 
 ## Resources
 
@@ -142,8 +145,8 @@ Upgrade from 0.1: state from 0.1 records the policy `destroy` for each project. 
   with the same name is adopted only with `--adopt`. The removal policy is `retain`: only a
   resource with `RemovalPolicy.destroy()` deletes the project with its deployments and data.
 - `Convex.DeployKey`: `{ deployment, name, allowedActions? }`. Outputs `uniqueName`, `keyId`, and
-  the `deployKey` secret. Any change replaces the key. Delete revokes the key by its secret. Keys
-  are never adopted: a key without its secret is useless.
+  the `deployKey` secret. Any change replaces the key. Delete revokes the key by its secret; a key
+  from 0.1 state stays. Keys are never adopted: a key without its secret is useless.
 - `Convex.PreviewDeployKey`: `{ projectId, name }`. Project-level key for preview deployments.
   Outputs `uniqueName`, `keyId`, and `previewDeployKey`.
 - `Convex.EnvironmentVariable`: `{ deployment, deployKey, name, value }`. One variable on one

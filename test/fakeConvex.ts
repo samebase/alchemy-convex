@@ -80,7 +80,10 @@ export class FakeConvex {
    * Answers sent before the normal handler, for "METHOD host/path" keys,
    * such as a recorded write conflict. Each answer is used once.
    */
-  readonly scripted = new Map<string, { status: number; body: unknown }[]>();
+  readonly scripted = new Map<
+    string,
+    { status: number; body: unknown; meanwhile?: () => void }[]
+  >();
   /** Page size of GET /teams/{team_id}/projects. */
   pageSize = 100;
   /** Rows that GET /teams/{team_id}/projects leaves out while this is above zero, one call at a time. */
@@ -133,7 +136,11 @@ export class FakeConvex {
     const path = `${url.host}${url.pathname}`;
     this.sent.push({ method: request.method, path, query: url.searchParams, body });
     const next = this.scripted.get(`${request.method} ${path}`)?.shift();
-    if (next !== undefined) return json(next.status, next.body);
+    if (next !== undefined) {
+      // A change that another writer makes while this request runs.
+      next.meanwhile?.();
+      return json(next.status, next.body);
+    }
     const bearer = (request.headers.get("Authorization") ?? "").replace(/^Bearer /, "");
     return this.route(request.method, url, body, bearer);
   };
