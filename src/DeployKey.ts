@@ -1,11 +1,22 @@
 // Convex.DeployKey: a deploy key for one deployment, such as the key
 // `npx convex deploy` reads from CONVEX_DEPLOY_KEY.
 //
-// Convex returns the secret only once, from create_deploy_key. The listing
-// shows each key under a unique name, the requested name plus a short id
-// suffix such as "my-key (0e71106d)", and delete_deploy_key accepts that
-// unique name. A key cannot be changed after creation, so every property
-// change is a replacement.
+// Convex returns the secret only once, from create_deploy_key, and the
+// response has no id. The listing shows each key with a numeric id and a
+// name: the requested name, or, when a listed key already has that name, the
+// requested name plus a suffix such as " (870993b4-ffe6-4911-adbd-e29f7fd712f2)".
+//
+// One resource must never revoke the key of another resource:
+// - The requested name is the `name` prop plus a hash of the resource's fqn
+//   and instance id, so two resources with the same `name` request
+//   different names.
+// - After the create, exactly one listed key must have the requested name.
+//   Otherwise the create fails with a typed error that lists the keys. State
+//   keeps that key's numeric id.
+// - Delete sends the secret as `id`, so it can revoke only the key that this
+//   resource created. It never deletes by a listed name.
+// A key cannot change after creation, so every property change is a replacement.
+import { createHash } from "node:crypto";
 import { Resource } from "alchemy";
 import { havePropsChanged, isResolved } from "alchemy/Diff";
 import * as Provider from "alchemy/Provider";
@@ -13,7 +24,12 @@ import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import type { components } from "@convex-dev/platform/managementApi";
-import { absentAsUndefined, ManagementApi } from "./ManagementApi.ts";
+import {
+  absentAsUndefined,
+  type ConvexApiError,
+  ManagementApi,
+  retryIdempotentWrite,
+} from "./ManagementApi.ts";
 import type { Providers } from "./Providers.ts";
 
 /** Actions a deploy key can be limited to, from the generated schema. */
@@ -23,35 +39,50 @@ export type DeployKeyAction = NonNullable<
 
 /**
  * True when `listedName` is how Convex lists a key created as `name`: the
- * requested name, a space, and one parenthesized id without spaces. The id
- * check keeps `my-key` from matching a key created as `my-key (old)`.
+ * requested name itself, or the requested name, a space, and one
+ * parenthesized suffix without spaces. The suffix check keeps `my-key` from
+ * matching a key created as `my-key (old)`.
  */
 const isListedAs = (listedName: string, name: string) => {
   const prefix = `${name} (`;
-  return listedName.startsWith(prefix) && /^[^\s()]+\)$/.test(listedName.slice(prefix.length));
+  return (
+    listedName === name ||
+    (listedName.startsWith(prefix) && /^[^\s()]+\)$/.test(listedName.slice(prefix.length)))
+  );
 };
 
 /**
- * The listed key that a create call for `name` just made. The newest match
- * wins: an earlier attempt that failed before Alchemy saved state can leave
- * another key with the same requested name, and its secret is lost.
+ * True when the listing still has the key in state: by numeric id, or by
+ * listed name for state written by 0.1.x, which has no id.
  */
-export const selectCreatedKey = (
+export const isKeyListed = (
+  entries: ReadonlyArray<typeof ListedKey.Type>,
+  key: { readonly keyId: number | undefined; readonly uniqueName: string },
+): boolean =>
+  entries.some((entry) =>
+    key.keyId === undefined ? entry.name === key.uniqueName : entry.id === key.keyId,
+  );
+
+/** The listed keys that Convex shows for a key created as `name`. */
+export const keysListedAs = (
   entries: ReadonlyArray<typeof ListedKey.Type>,
   name: string,
-): typeof ListedKey.Type | undefined =>
-  entries
-    .filter((entry) => isListedAs(entry.name, name))
-    .reduce<typeof ListedKey.Type | undefined>(
-      (newest, entry) =>
-        newest === undefined || entry.creationTime > newest.creationTime ? entry : newest,
-      undefined,
-    );
+): ReadonlyArray<typeof ListedKey.Type> => entries.filter((entry) => isListedAs(entry.name, name));
+
+/**
+ * The name that a resource instance requests: `name`, a dash, and the first
+ * 12 hex characters of sha256("<fqn>:<instanceId>"). Two resources, or the
+ * old and the new generation of one replaced resource, never request the
+ * same name. Pattern from Confect `packages/alchemy/src/internal/ResourceIdentity.ts`
+ * (https://github.com/rjdellecese/confect, ISC license).
+ */
+export const requestedKeyName = (name: string, fqn: string, instanceId: string): string =>
+  `${name}-${createHash("sha256").update(`${fqn}:${instanceId}`).digest("hex").slice(0, 12)}`;
 
 /** One row of list_deploy_keys and list_preview_deploy_keys. Only the fields the providers use. */
 export const ListedKey = Schema.Struct({
+  id: Schema.Number,
   name: Schema.String,
-  creationTime: Schema.Number,
 });
 
 /** GET /deployments/{deployment_name}/list_deploy_keys */
@@ -60,18 +91,90 @@ export const DeployKeyList = Schema.Array(ListedKey);
 /** POST /deployments/{deployment_name}/create_deploy_key */
 export const CreatedDeployKey = Schema.Struct({ deployKey: Schema.String });
 
+/**
+ * A key cannot be tied to one resource: before the create, listed keys
+ * already have the requested name, or after the create, not exactly one has it.
+ */
+export class DeployKeyRecoveryRequired extends Schema.TaggedError<DeployKeyRecoveryRequired>()(
+  "DeployKeyRecoveryRequired",
+  {
+    /** Where the keys live, such as `deployment happy-otter-123` or `project 3145389`. */
+    target: Schema.String,
+    /** The requested name. */
+    name: Schema.String,
+    /** The listed keys with the requested name. */
+    keys: Schema.Array(ListedKey),
+    /** True when this run created a key and then revoked it again by its secret. */
+    revokedNewKey: Schema.Boolean,
+  },
+) {
+  override get message() {
+    const listed =
+      this.keys.length === 0
+        ? "no key"
+        : this.keys.map((key) => `"${key.name}" (id ${key.id})`).join(", ");
+    return this.revokedNewKey
+      ? `Convex created deploy key "${this.name}" on ${this.target}, but the listing shows ${listed} with that name, not exactly one. The resource cannot track the new key, so Alchemy revoked it by its secret. Delete any leftover keys with that name in the Convex dashboard, then run the deploy again.`
+      : `${this.target} already lists ${listed} with the name "${this.name}", but Alchemy state has no such key. An interrupted run probably created it, and its secret is lost. Delete these keys in the Convex dashboard, then run the deploy again.`;
+  }
+}
+
+/**
+ * Creates a key named `name` and ties it to the caller. Fails before the
+ * create when keys with that name already exist, and after the create when
+ * the listing does not show exactly one key with that name. In the second
+ * case it first revokes the new key by its secret.
+ */
+export const createTrackedKey = (options: {
+  readonly target: string;
+  readonly name: string;
+  readonly list: Effect.Effect<ReadonlyArray<typeof ListedKey.Type>, ConvexApiError>;
+  readonly create: Effect.Effect<string, ConvexApiError>;
+  readonly revoke: (secret: string) => Effect.Effect<void, ConvexApiError>;
+}) =>
+  Effect.gen(function* () {
+    const { target, name } = options;
+    const existing = keysListedAs(yield* options.list, name);
+    if (existing.length > 0) {
+      return yield* new DeployKeyRecoveryRequired({
+        target,
+        name,
+        keys: existing,
+        revokedNewKey: false,
+      });
+    }
+    const secret = yield* options.create;
+    const listed = keysListedAs(yield* options.list, name);
+    const [only] = listed;
+    if (only === undefined || listed.length !== 1) {
+      yield* absentAsUndefined(options.revoke(secret));
+      return yield* new DeployKeyRecoveryRequired({
+        target,
+        name,
+        keys: listed,
+        revokedNewKey: true,
+      });
+    }
+    return { keyId: only.id, uniqueName: only.name, secret: Redacted.make(secret) };
+  });
+
 export interface DeployKeyProps {
   /** Deployment name, such as `project.prodDeploymentName`. */
   readonly deployment: string;
-  /** Requested key name. Convex appends a short id to make it unique. */
+  /**
+   * Key name. The provider requests this name, a dash, and a hash of the
+   * resource identity, so two resources with one `name` get different keys.
+   */
   readonly name: string;
   /** Limits the key to these actions. Convex grants every deployment action when omitted. */
   readonly allowedActions?: readonly DeployKeyAction[];
 }
 
 export interface DeployKeyAttributes {
-  /** The name Convex lists the key under, such as "my-key (0e71106d)". */
+  /** The name Convex lists the key under, such as "ci-3f2a1b0c9d8e". */
   readonly uniqueName: string;
+  /** Numeric id of the key in the listing. Undefined in state written by 0.1.x. */
+  readonly keyId: number | undefined;
   readonly deployment: string;
   /** The secret, such as `prod:<deployment>|<token>`. Convex returns it only at creation. */
   readonly deployKey: Redacted.Redacted<string>;
@@ -101,6 +204,20 @@ export const DeployKeyProvider = () =>
           )
           .pipe(Effect.map((body) => Schema.decodeUnknownSync(DeployKeyList)(body)));
 
+      /**
+       * `id` is the secret: Convex accepts it, and it matches only the key
+       * that this resource created. A second delete answers 404.
+       */
+      const deleteKey = (deployment: string, secret: string) =>
+        retryIdempotentWrite(
+          api.requestVoid("delete deploy key", (client) =>
+            client.POST("/deployments/{deployment_name}/delete_deploy_key", {
+              params: { path: { deployment_name: deployment } },
+              body: { id: secret },
+            }),
+          ),
+        );
+
       return {
         stables: ["uniqueName", "deployment"],
 
@@ -119,52 +236,50 @@ export const DeployKeyProvider = () =>
           // A key that is not in state has no known secret, so it is never adopted.
           if (output === undefined) return undefined;
           const entries = yield* absentAsUndefined(listKeys(output.deployment));
-          return entries?.some((entry) => entry.name === output.uniqueName) ? output : undefined;
+          return entries !== undefined && isKeyListed(entries, output) ? output : undefined;
         }),
 
-        reconcile: Effect.fn(function* ({ news, output }) {
+        reconcile: Effect.fn(function* ({ fqn, instanceId, news, output }) {
           if (output !== undefined) {
             // The secret cannot be read back. A key that still exists keeps the one in state.
-            const entries = yield* listKeys(news.deployment);
-            if (entries.some((entry) => entry.name === output.uniqueName)) return output;
+            if (isKeyListed(yield* listKeys(news.deployment), output)) return output;
           }
-          const created = yield* api.request("create deploy key", (client) =>
-            client.POST("/deployments/{deployment_name}/create_deploy_key", {
-              params: { path: { deployment_name: news.deployment } },
-              body: {
-                name: news.name,
-                ...(news.allowedActions === undefined
-                  ? {}
-                  : { allowedActions: [...news.allowedActions] }),
-              },
-            }),
-          );
-          const { deployKey } = Schema.decodeUnknownSync(CreatedDeployKey)(created);
-          const listed = selectCreatedKey(yield* listKeys(news.deployment), news.name);
-          if (listed === undefined) {
-            return yield* Effect.die(
-              new Error(
-                `Convex created deploy key "${news.name}" on ${news.deployment} but does not list it`,
+          const name = requestedKeyName(news.name, fqn, instanceId);
+          const { keyId, uniqueName, secret } = yield* createTrackedKey({
+            target: `deployment ${news.deployment}`,
+            name,
+            list: listKeys(news.deployment),
+            create: api
+              .request("create deploy key", (client) =>
+                client.POST("/deployments/{deployment_name}/create_deploy_key", {
+                  params: { path: { deployment_name: news.deployment } },
+                  body: {
+                    name,
+                    ...(news.allowedActions === undefined
+                      ? {}
+                      : { allowedActions: [...news.allowedActions] }),
+                  },
+                }),
+              )
+              .pipe(
+                Effect.map((body) => Schema.decodeUnknownSync(CreatedDeployKey)(body).deployKey),
               ),
-            );
-          }
-          return {
-            uniqueName: listed.name,
-            deployment: news.deployment,
-            deployKey: Redacted.make(deployKey),
-          };
+            revoke: (secret) => deleteKey(news.deployment, secret),
+          });
+          return { uniqueName, keyId, deployment: news.deployment, deployKey: secret };
         }),
 
         delete: Effect.fn(function* ({ output }) {
+          // Without the secret, no call can name this key alone: 0.1.x state
+          // can hold the listed name of another resource's key.
+          if (!Redacted.isRedacted(output.deployKey)) {
+            yield* Effect.logWarning(
+              `Convex.DeployKey "${output.uniqueName}" on ${output.deployment} has no secret in state, so Alchemy does not delete it. Delete it in the Convex dashboard.`,
+            );
+            return;
+          }
           // 404 DeployKeyNotFound: an earlier attempt or someone else deleted it.
-          yield* absentAsUndefined(
-            api.requestVoid("delete deploy key", (client) =>
-              client.POST("/deployments/{deployment_name}/delete_deploy_key", {
-                params: { path: { deployment_name: output.deployment } },
-                body: { id: output.uniqueName },
-              }),
-            ),
-          );
+          yield* absentAsUndefined(deleteKey(output.deployment, Redacted.value(output.deployKey)));
         }),
       };
     }),

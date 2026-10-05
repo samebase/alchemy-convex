@@ -10,7 +10,7 @@ import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import { assert, describe, expect, it } from "vitest";
 import { fromConfig } from "../../src/Credentials.ts";
-import { CreatedDeployKey, DeployKeyList, selectCreatedKey } from "../../src/DeployKey.ts";
+import { CreatedDeployKey, DeployKeyList, keysListedAs } from "../../src/DeployKey.ts";
 import {
   EnvironmentVariableList,
   findVariable,
@@ -92,7 +92,7 @@ const roundTrip = Effect.gen(function* () {
   const useDeployKey = (deployKey: Redacted.Redacted<string>) =>
     Effect.gen(function* () {
       expect(Redacted.value(deployKey).startsWith(`dev:${deployment}|`)).toBe(true);
-      const listed = selectCreatedKey(yield* listDeployKeys, keyName);
+      const [listed] = keysListedAs(yield* listDeployKeys, keyName);
       assert(listed !== undefined, `deploy key ${keyName} is not listed`);
       console.log(`deploy key listed as "${listed.name}"`);
 
@@ -122,7 +122,7 @@ const roundTrip = Effect.gen(function* () {
         (previewKey) =>
           Effect.gen(function* () {
             expect(Redacted.value(previewKey).startsWith("preview:")).toBe(true);
-            const previewListed = selectCreatedKey(yield* listPreviewKeys, keyName);
+            const [previewListed] = keysListedAs(yield* listPreviewKeys, keyName);
             assert(previewListed !== undefined, `preview deploy key ${keyName} is not listed`);
             console.log(`preview deploy key listed as "${previewListed.name}"`);
             yield* deletePreviewKey(previewListed.name);

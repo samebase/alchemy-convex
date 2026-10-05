@@ -24,6 +24,7 @@ export {
   type DeployKeyAction,
   type DeployKeyAttributes,
   type DeployKeyProps,
+  DeployKeyRecoveryRequired,
 } from "./DeployKey.ts";
 export {
   EnvironmentVariable,

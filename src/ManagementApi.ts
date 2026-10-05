@@ -9,6 +9,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import { Credentials } from "./Credentials.ts";
 
@@ -109,6 +110,43 @@ export const settleVoid = (
     Effect.flatMap((result) =>
       result.response.ok ? Effect.void : Effect.fail(toApiError(operation, result)),
     ),
+  );
+
+/**
+ * True when an idempotent write can succeed on a new attempt:
+ *
+ * - A Convex write conflict. Two parallel update_environment_variables calls
+ *   on one deployment gave HTTP 503 `OptimisticConcurrencyControlFailure`,
+ *   "Data read or written in this mutation changed while it was being run",
+ *   in a live run. The platform codes `OCC` and `WriteConflict` and the
+ *   message "... changed while this mutation was being run ..." mean the same.
+ * - Any other 5xx answer. Two parallel delete_preview_deploy_key calls on one
+ *   project gave HTTP 500 `InternalServerError`, "Your request couldn't be
+ *   completed. Try again later.", in a live run. The next attempt succeeded.
+ */
+export const isRetryableWriteError = (error: ConvexApiError): boolean =>
+  error.code === "OptimisticConcurrencyControlFailure" ||
+  error.code === "OCC" ||
+  error.code === "WriteConflict" ||
+  /changed while (it|this mutation) was being run/.test(error.message) ||
+  error.status >= 500;
+
+/**
+ * Runs an idempotent write again after a retryable error: at most four more
+ * attempts, with exponential backoff from 100 ms and jitter. Other errors
+ * fail at once, and so does the last retryable error. Use it only for a
+ * write that has the same result when it runs twice, such as setting a
+ * value or deleting by id. Never for a create.
+ */
+export const retryIdempotentWrite = <A, R>(
+  effect: Effect.Effect<A, ConvexApiError, R>,
+): Effect.Effect<A, ConvexApiError, R> =>
+  effect.pipe(
+    Effect.retry({
+      while: isRetryableWriteError,
+      times: 4,
+      schedule: Schedule.exponential("100 millis").pipe(Schedule.jittered),
+    }),
   );
 
 /** Turns a 404 into `undefined` so read and delete stay idempotent. */
