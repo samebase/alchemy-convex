@@ -9,10 +9,14 @@
 // A variable that exists but is not in state belongs to someone else: its
 // old value is lost when this resource writes it. Alchemy takes it over only
 // with --adopt.
+//
+// A new `name` or `deployment` is an update, not a replacement: reconcile
+// writes the new variable first and then removes the one that state names.
+// A replacement would let the engine delete an old generation that has the
+// same name as the live one, for example after a refused rename is reverted.
 import { createDeploymentClient } from "@convex-dev/platform";
 import { Resource } from "alchemy";
 import { OwnedBySomeoneElse, Unowned } from "alchemy/AdoptPolicy";
-import { isResolved } from "alchemy/Diff";
 import * as Provider from "alchemy/Provider";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
@@ -126,37 +130,27 @@ export const EnvironmentVariableProvider = () =>
     Effect.gen(function* () {
       const api = yield* ManagementApi;
 
+      // No diff: the engine updates when any prop changed and compares
+      // Redacted values, such as the value and the deploy key, by content.
       return {
-        stables: ["deployment", "name"],
-
-        diff: ({ olds, news }) => {
-          if (!isResolved(news)) return Effect.succeed(undefined);
-          // Otherwise undefined: the engine updates when any prop changed and
-          // compares Redacted values, such as the value and the deploy key, by content.
-          return Effect.succeed(
-            olds.deployment !== news.deployment || olds.name !== news.name
-              ? ({ action: "replace" } as const)
-              : undefined,
-          );
-        },
-
         read: Effect.fn(function* ({ olds, output }) {
           const found = yield* readVariable(api, olds.deployment, olds.deployKey, olds.name);
           // No state: the variable belongs to someone else until the user passes --adopt.
           return found === undefined || output !== undefined ? found : Unowned(found);
         }),
 
-        reconcile: Effect.fn(function* ({ fqn, news, output }) {
+        reconcile: Effect.fn(function* ({ fqn, olds, news, output }) {
           const write = writeVariable(news.deployment, news.deployKey, news.name, news.value);
-          if (output !== undefined || (yield* shouldAdopt(fqn))) {
+          const inState = output?.deployment === news.deployment && output.name === news.name;
+          if (inState || (yield* shouldAdopt(fqn))) {
             // In state, or adopted: the variable is ours to set.
             yield* retryIdempotentWrite(write);
           } else {
-            // No state, for example after a replacement: the engine did not
-            // read this name in plan. Overwriting a variable that exists loses
-            // its value, so that needs adoption. Each attempt checks first, so
-            // a retry after a write conflict never overwrites a variable that
-            // another writer created in the meantime.
+            // Not in state: a new resource, or a new name or deployment.
+            // Overwriting a variable that exists loses its value, so that
+            // needs adoption. Each attempt checks first, so a retry after a
+            // write conflict never overwrites a variable that another writer
+            // created in the meantime.
             yield* retryIdempotentWrite(
               Effect.gen(function* () {
                 const existing = yield* readVariable(
@@ -175,6 +169,23 @@ export const EnvironmentVariableProvider = () =>
                 yield* write;
               }),
             );
+          }
+          if (output !== undefined && !inState) {
+            // A rename or a move: remove the variable that state names, now
+            // that the new one is written. Only a key for that deployment can.
+            const key =
+              output.deployment === news.deployment
+                ? news.deployKey
+                : olds?.deployment === output.deployment
+                  ? olds.deployKey
+                  : undefined;
+            if (key === undefined) {
+              yield* Effect.logWarning(
+                `Environment variable ${output.name} on deployment ${output.deployment} stays: Alchemy has no deploy key for that deployment. Remove it in the Convex dashboard.`,
+              );
+            } else {
+              yield* absentAsUndefined(updateVariable(output.deployment, key, output.name, null));
+            }
           }
           return { deployment: news.deployment, name: news.name };
         }),

@@ -159,6 +159,41 @@ describe("Convex.EnvironmentVariable through the engine", () => {
     }),
   );
 
+  test.provider("keeps the variable when a refused rename is reverted", (stack) =>
+    Effect.gen(function* () {
+      const fake = new FakeConvex().install();
+      fake.variables.set(deployment, { [existing]: "old value" });
+      yield* stack.deploy(variable("SITE_URL").pipe(Effect.as({})));
+      const refused = yield* Effect.flip(stack.deploy(variable(existing).pipe(Effect.as({}))));
+      expect(refused).toMatchObject({ _tag: "OwnedBySomeoneElse" });
+      // Revert the name: the variable in state is still ours, and nothing deletes it.
+      yield* stack.deploy(variable("SITE_URL").pipe(Effect.as({})));
+      expect(fake.variables.get(deployment)).toEqual({
+        [existing]: "old value",
+        SITE_URL: "new value",
+      });
+    }),
+  );
+
+  test.provider("renames by writing the new variable before it removes the old one", (stack) =>
+    Effect.gen(function* () {
+      const fake = new FakeConvex().install();
+      yield* stack.deploy(variable("SITE_URL").pipe(Effect.as({})));
+      const from = fake.sent.length;
+      yield* stack.deploy(variable("SITE_URL_2").pipe(Effect.as({})));
+      expect(fake.variables.get(deployment)).toEqual({ SITE_URL_2: "new value" });
+      expect(
+        fake.sent
+          .slice(from)
+          .filter((request) => `${request.method} ${request.path}` === UPDATE)
+          .map((request) => request.body),
+      ).toEqual([
+        { changes: [{ name: "SITE_URL_2", value: "new value" }] },
+        { changes: [{ name: "SITE_URL", value: null }] },
+      ]);
+    }),
+  );
+
   test.provider("refuses to overwrite an existing variable after a rename", (stack) =>
     Effect.gen(function* () {
       const fake = new FakeConvex().install();

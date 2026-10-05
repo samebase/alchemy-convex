@@ -23,7 +23,8 @@ wrong deploy key, or overwrite an environment variable.
   remove or replace them.
 - `Convex.EnvironmentVariable` and `Convex.DefaultEnvironmentVariable` overwrite an existing value
   that is not in state only with `--adopt`. Their writes run again after a write conflict or a
-  5xx answer.
+  5xx answer, and a create checks again before each attempt. A rename or a move is an update that
+  writes the new value and then removes the old one, not a replacement.
 - `Convex.Deploy` always pushes a preview deploy (`previewName` or `previewCreate`), because a
   preview deployment can expire.
 - Expected failures are typed errors that name the fix, not defects.

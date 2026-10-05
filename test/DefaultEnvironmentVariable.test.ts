@@ -146,6 +146,25 @@ describe("Convex.DefaultEnvironmentVariable through the engine", () => {
     }),
   );
 
+  test.provider("keeps the default when a refused rename is reverted", (stack) =>
+    Effect.gen(function* () {
+      const fake = new FakeConvex().install();
+      fake.defaults.push({ projectId: PROJECT_ID, name: SHARED, deploymentType: "preview" });
+      const preview = (name: string) =>
+        Convex.DefaultEnvironmentVariable("Default", {
+          projectId: PROJECT_ID,
+          name,
+          deploymentType: "preview",
+          value: "new value",
+        }).pipe(Effect.as({}));
+      yield* stack.deploy(preview(PREVIEW_ONLY));
+      const refused = yield* Effect.flip(stack.deploy(preview(SHARED)));
+      expect(refused).toMatchObject({ _tag: "OwnedBySomeoneElse" });
+      yield* stack.deploy(preview(PREVIEW_ONLY));
+      expect(fake.defaults.map((row) => row.name).sort()).toEqual([PREVIEW_ONLY, SHARED]);
+    }),
+  );
+
   test.provider("overwrites a default that is not in state only with adoption", (stack) =>
     Effect.gen(function* () {
       const fake = new FakeConvex().install();

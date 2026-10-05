@@ -10,9 +10,13 @@
 // A default that exists but is not in state belongs to someone else: its old
 // value is lost when this resource writes it. Alchemy takes it over only with
 // --adopt.
+//
+// A new `projectId`, `name`, or `deploymentType` is an update, not a
+// replacement: reconcile writes the new default first and then removes the
+// one that state names. A replacement would let the engine delete an old
+// generation that names the same default as the live one.
 import { Resource } from "alchemy";
 import { OwnedBySomeoneElse, Unowned } from "alchemy/AdoptPolicy";
-import { isResolved } from "alchemy/Diff";
 import * as Provider from "alchemy/Provider";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
@@ -156,22 +160,9 @@ export const DefaultEnvironmentVariableProvider = () =>
     Effect.gen(function* () {
       const api = yield* ManagementApi;
 
+      // No diff: the engine updates when any prop changed and compares a
+      // Redacted value by content.
       return {
-        stables: ["projectId", "name", "deploymentType"],
-
-        diff: ({ olds, news }) => {
-          if (!isResolved(news)) return Effect.succeed(undefined);
-          // Otherwise undefined: the engine updates when any prop changed and
-          // compares a Redacted value by content.
-          return Effect.succeed(
-            olds.projectId !== news.projectId ||
-              olds.name !== news.name ||
-              olds.deploymentType !== news.deploymentType
-              ? ({ action: "replace" } as const)
-              : undefined,
-          );
-        },
-
         read: Effect.fn(function* ({ olds, output }) {
           const found = yield* readDefault(api, olds.projectId, olds.name, olds.deploymentType);
           // No state: the default belongs to someone else until the user passes --adopt.
@@ -186,15 +177,19 @@ export const DefaultEnvironmentVariableProvider = () =>
             news.deploymentType,
             news.value,
           );
-          if (output !== undefined || (yield* shouldAdopt(fqn))) {
+          const inState =
+            output?.projectId === news.projectId &&
+            output.name === news.name &&
+            output.deploymentType === news.deploymentType;
+          if (inState || (yield* shouldAdopt(fqn))) {
             // In state, or adopted: the default is ours to set.
             yield* retryIdempotentWrite(write);
           } else {
-            // No state, for example after a replacement: the engine did not
-            // read this name in plan. Overwriting a default that exists loses
-            // its value, so that needs adoption. Each attempt checks first, so
-            // a retry after a write conflict never overwrites a default that
-            // another writer created in the meantime.
+            // Not in state: a new resource, or a new project, name, or type.
+            // Overwriting a default that exists loses its value, so that
+            // needs adoption. Each attempt checks first, so a retry after a
+            // write conflict never overwrites a default that another writer
+            // created in the meantime.
             yield* retryIdempotentWrite(
               Effect.gen(function* () {
                 const existing = yield* readDefault(
@@ -212,6 +207,13 @@ export const DefaultEnvironmentVariableProvider = () =>
                 }
                 yield* write;
               }),
+            );
+          }
+          if (output !== undefined && !inState) {
+            // A rename or a move: remove the default that state names, now
+            // that the new one is written. 404: that project is gone.
+            yield* absentAsUndefined(
+              updateDefault(api, output.projectId, output.name, output.deploymentType, null),
             );
           }
           return {

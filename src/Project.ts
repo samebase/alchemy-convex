@@ -279,7 +279,10 @@ export const ProjectProvider = () =>
           if (!isResolved(news)) return undefined;
           // Nothing exists yet, so nothing can be lost.
           if (output === undefined) return undefined;
-          yield* checkCreateTimeProps(output.projectId, olds, news);
+          // A deploymentType or deploymentRegion change fails in reconcile,
+          // before any API call. Reconcile compares with the props of the last
+          // successful deploy. Here, `olds` can be the props of a refused
+          // update, so a check here would also refuse the props that fix it.
           if (olds.team !== news.team) {
             const requestedTeamId = yield* api.resolveTeamId(news.team);
             if (requestedTeamId !== output.teamId) {
