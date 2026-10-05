@@ -37,9 +37,13 @@ export {
   type PreviewDeployKeyProps,
 } from "./PreviewDeployKey.ts";
 export {
+  AmbiguousProject,
+  CreatedProjectNotFound,
   type DeploymentRegion,
   Project,
+  ProjectDeploymentChange,
   type ProjectAttributes,
   type ProjectProps,
+  ProjectTeamChange,
 } from "./Project.ts";
 export { Providers, providers } from "./Providers.ts";
