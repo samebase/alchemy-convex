@@ -2,7 +2,7 @@
 // through the real Alchemy engine against the throwaway team.
 import * as Alchemy from "alchemy";
 import * as Effect from "effect/Effect";
-import * as Convex from "../../src/index.ts";
+import * as Convex from "../../src/index.ts"; // in your app: "@samebase/alchemy-convex"
 
 export default Alchemy.Stack(
   "AlchemyConvexSmoke",
