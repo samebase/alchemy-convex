@@ -12,15 +12,15 @@ import { assert, describe, expect, it } from "vitest";
 import { fromConfig } from "../../src/Credentials.ts";
 import { CreatedDeployKey, DeployKeyList, selectCreatedKey } from "../../src/DeployKey.ts";
 import {
-import { liveTargets } from "./env.ts";
   EnvironmentVariableList,
   findVariable,
   updateVariable,
 } from "../../src/EnvironmentVariable.ts";
 import { absentAsUndefined, ManagementApi, ManagementApiLive } from "../../src/ManagementApi.ts";
 import { CreatedPreviewDeployKey, PreviewDeployKeyList } from "../../src/PreviewDeployKey.ts";
+import { liveTargets } from "./env.ts";
 
-/** Dev deployment of the throwaway project tmp-alchemy-spike-base. */
+/** Throwaway targets, overridable through env (see env.ts). */
 const { deployment, projectId } = liveTargets;
 
 const roundTrip = Effect.gen(function* () {
