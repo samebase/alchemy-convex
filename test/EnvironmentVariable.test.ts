@@ -175,6 +175,72 @@ describe("Convex.EnvironmentVariable through the engine", () => {
     }),
   );
 
+  /** Five recorded 500 answers for the removal of a variable: the retries run out. */
+  const failRemovals = () =>
+    Array.from({ length: 5 }, () => ({
+      status: 500,
+      body: fixture("project_delete_preview_deploy_key_500.json"),
+      when: (body: Record<string, unknown> | undefined) =>
+        JSON.stringify(body?.["changes"]).includes('"value":null'),
+    }));
+
+  test.provider(
+    "keeps a variable that a rename could not remove, and removes it on the next deploy",
+    (stack) =>
+      Effect.gen(function* () {
+        const fake = new FakeConvex().install();
+        yield* stack.deploy(variable("SITE_URL").pipe(Effect.as({})));
+        fake.scripted.set(UPDATE, failRemovals());
+        // The new variable is written; the removal of the old one runs out of retries.
+        yield* stack.deploy(variable("SITE_URL_2").pipe(Effect.as({})));
+        expect(fake.variables.get(deployment)).toEqual({
+          SITE_URL: "new value",
+          SITE_URL_2: "new value",
+        });
+        // The API works again. The same props: the next deploy removes the old variable.
+        yield* stack.deploy(variable("SITE_URL_2").pipe(Effect.as({})));
+        expect(fake.variables.get(deployment)).toEqual({ SITE_URL_2: "new value" });
+      }),
+  );
+
+  test.provider("removes a variable that a rename could not remove on destroy", (stack) =>
+    Effect.gen(function* () {
+      const fake = new FakeConvex().install();
+      yield* stack.deploy(variable("SITE_URL").pipe(Effect.as({})));
+      fake.scripted.set(UPDATE, failRemovals());
+      yield* stack.deploy(variable("SITE_URL_2").pipe(Effect.as({})));
+      yield* stack.destroy();
+      expect(fake.variables.get(deployment)).toEqual({});
+    }),
+  );
+
+  test.provider("deletes with the key of the deployment in state after a refused move", (stack) =>
+    Effect.gen(function* () {
+      const fake = new FakeConvex().install();
+      const other = "flippant-cardinal-923";
+      const otherKey = Redacted.make(`${Redacted.value(deployKey)}-other`);
+      fake.deploymentKeys.set(deployment, Redacted.value(deployKey));
+      fake.deploymentKeys.set(other, Redacted.value(otherKey));
+      fake.variables.set(other, { SITE_URL: "other value" });
+      yield* stack.deploy(variable("SITE_URL").pipe(Effect.as({})));
+      const refused = yield* Effect.flip(
+        stack.deploy(
+          Convex.EnvironmentVariable("Variable", {
+            deployment: other,
+            deployKey: otherKey,
+            name: "SITE_URL",
+            value: "new value",
+          }).pipe(Effect.as({})),
+        ),
+      );
+      expect(refused).toMatchObject({ _tag: "OwnedBySomeoneElse" });
+      // State keeps the refused props; the delete still uses the key of the first deployment.
+      yield* stack.destroy();
+      expect(fake.variables.get(deployment)).toEqual({});
+      expect(fake.variables.get(other)).toEqual({ SITE_URL: "other value" });
+    }),
+  );
+
   test.provider("renames by writing the new variable before it removes the old one", (stack) =>
     Effect.gen(function* () {
       const fake = new FakeConvex().install();

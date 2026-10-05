@@ -14,7 +14,10 @@
 // A new `projectId`, `name`, or `deploymentType` is an update, not a
 // replacement: reconcile writes the new default first and then removes the
 // one that state names. A replacement would let the engine delete an old
-// generation that names the same default as the live one.
+// generation that names the same default as the live one. When that removal
+// fails, the attributes keep the old default in `staleDefaults`, and the next
+// deploy and the delete remove it. Read and delete use the identity in the
+// attributes: after a refused change, the props name the refused one.
 import { Resource } from "alchemy";
 import { OwnedBySomeoneElse, Unowned } from "alchemy/AdoptPolicy";
 import * as Provider from "alchemy/Provider";
@@ -44,7 +47,7 @@ export const findDefault = (
   projectId: number,
   name: string,
   deploymentType: DeploymentType,
-): DefaultEnvironmentVariableAttributes | undefined =>
+): DefaultIdentity | undefined =>
   list.items.some((item) => item.name === name && item.deploymentTypes.includes(deploymentType))
     ? { projectId, name, deploymentType }
     : undefined;
@@ -104,7 +107,7 @@ export const updateDefault = (
   value: string | Redacted.Redacted<string> | null,
 ) => retryIdempotentWrite(writeDefault(api, projectId, name, deploymentType, value));
 
-/** Attributes of the default, or undefined when the default or the project is absent. */
+/** The default's identity, or undefined when the default or the project is absent. */
 const readDefault = (
   api: ManagementApiService,
   projectId: number,
@@ -137,10 +140,16 @@ export interface DefaultEnvironmentVariableProps {
   readonly deploymentType: DeploymentType;
 }
 
-export interface DefaultEnvironmentVariableAttributes {
+/** The default that a project, a name, and a deployment type name. */
+export interface DefaultIdentity {
   readonly projectId: number;
   readonly name: string;
   readonly deploymentType: DeploymentType;
+}
+
+export interface DefaultEnvironmentVariableAttributes extends DefaultIdentity {
+  /** Defaults that a rename or a move did not remove yet. The next deploy and the delete remove them. */
+  readonly staleDefaults: ReadonlyArray<DefaultIdentity> | undefined;
 }
 
 export type DefaultEnvironmentVariable = Resource<
@@ -154,22 +163,56 @@ export const DefaultEnvironmentVariable = Resource<DefaultEnvironmentVariable>(
   "Convex.DefaultEnvironmentVariable",
 );
 
+const sameDefault = (a: DefaultIdentity, b: DefaultIdentity) =>
+  a.projectId === b.projectId && a.name === b.name && a.deploymentType === b.deploymentType;
+
 export const DefaultEnvironmentVariableProvider = () =>
   Provider.effect(
     DefaultEnvironmentVariable,
     Effect.gen(function* () {
       const api = yield* ManagementApi;
 
-      // No diff: the engine updates when any prop changed and compares a
-      // Redacted value by content.
+      /** Removes the defaults and returns the ones that are still there, each with a warning. */
+      const removeStale = (stale: ReadonlyArray<DefaultIdentity>) =>
+        Effect.forEach(stale, (old) =>
+          // 404 ProjectNotFound: that project is gone, so is the default.
+          absentAsUndefined(
+            updateDefault(api, old.projectId, old.name, old.deploymentType, null),
+          ).pipe(
+            Effect.as<ReadonlyArray<DefaultIdentity>>([]),
+            Effect.catchTag("ConvexApiError", (error) =>
+              Effect.logWarning(
+                `The ${old.deploymentType} default environment variable ${old.name} of project ${old.projectId} is not removed yet: ${error.message}. The next deploy tries again.`,
+              ).pipe(Effect.as([old])),
+            ),
+          ),
+        ).pipe(Effect.map((left) => left.flat()));
+
       return {
+        // A default that a rename did not remove yet needs an update, which
+        // removes it. Otherwise the engine updates when any prop changed and
+        // compares a Redacted value by content.
+        diff: ({ output }) =>
+          Effect.succeed(
+            output?.staleDefaults !== undefined && output.staleDefaults.length > 0
+              ? ({ action: "update" } as const)
+              : undefined,
+          ),
+
         read: Effect.fn(function* ({ olds, output }) {
-          const found = yield* readDefault(api, olds.projectId, olds.name, olds.deploymentType);
+          const at = output ?? olds;
+          const found = yield* readDefault(api, at.projectId, at.name, at.deploymentType);
+          if (found === undefined) return undefined;
           // No state: the default belongs to someone else until the user passes --adopt.
-          return found === undefined || output !== undefined ? found : Unowned(found);
+          return output ?? Unowned({ ...found, staleDefaults: undefined });
         }),
 
         reconcile: Effect.fn(function* ({ fqn, news, output }) {
+          // A rename back to a default that a failed cleanup left is still ours.
+          const stale = (output?.staleDefaults ?? []).filter((old) => !sameDefault(old, news));
+          const owned =
+            (output !== undefined && sameDefault(output, news)) ||
+            stale.length !== (output?.staleDefaults?.length ?? 0);
           const write = writeDefault(
             api,
             news.projectId,
@@ -177,11 +220,7 @@ export const DefaultEnvironmentVariableProvider = () =>
             news.deploymentType,
             news.value,
           );
-          const inState =
-            output?.projectId === news.projectId &&
-            output.name === news.name &&
-            output.deploymentType === news.deploymentType;
-          if (inState || (yield* shouldAdopt(fqn))) {
+          if (owned || (yield* shouldAdopt(fqn))) {
             // In state, or adopted: the default is ours to set.
             yield* retryIdempotentWrite(write);
           } else {
@@ -209,24 +248,29 @@ export const DefaultEnvironmentVariableProvider = () =>
               }),
             );
           }
-          if (output !== undefined && !inState) {
-            // A rename or a move: remove the default that state names, now
-            // that the new one is written. 404: that project is gone.
-            yield* absentAsUndefined(
-              updateDefault(api, output.projectId, output.name, output.deploymentType, null),
-            );
+          if (output !== undefined && !sameDefault(output, news)) {
+            // A rename or a move: the default that state names is now stale.
+            stale.push({
+              projectId: output.projectId,
+              name: output.name,
+              deploymentType: output.deploymentType,
+            });
           }
+          const left = yield* removeStale(stale);
           return {
             projectId: news.projectId,
             name: news.name,
             deploymentType: news.deploymentType,
+            staleDefaults: left.length === 0 ? undefined : left,
           };
         }),
 
         delete: Effect.fn(function* ({ output }) {
           // Removing an absent default succeeds; 404 ProjectNotFound means the project is gone.
-          yield* absentAsUndefined(
-            updateDefault(api, output.projectId, output.name, output.deploymentType, null),
+          yield* Effect.forEach([output, ...(output.staleDefaults ?? [])], (variable) =>
+            absentAsUndefined(
+              updateDefault(api, variable.projectId, variable.name, variable.deploymentType, null),
+            ),
           );
         }),
       };

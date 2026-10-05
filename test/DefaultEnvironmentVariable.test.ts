@@ -146,6 +146,35 @@ describe("Convex.DefaultEnvironmentVariable through the engine", () => {
     }),
   );
 
+  test.provider(
+    "keeps a default that a rename could not remove, and removes it on the next deploy",
+    (stack) =>
+      Effect.gen(function* () {
+        const fake = new FakeConvex().install();
+        const preview = (name: string) =>
+          Convex.DefaultEnvironmentVariable("Default", {
+            projectId: PROJECT_ID,
+            name,
+            deploymentType: "preview",
+            value: "new value",
+          }).pipe(Effect.as({}));
+        yield* stack.deploy(preview(PREVIEW_ONLY));
+        fake.scripted.set(
+          UPDATE,
+          Array.from({ length: 5 }, () => ({
+            status: 500,
+            body: fixture("project_delete_preview_deploy_key_500.json"),
+            when: (body: Record<string, unknown> | undefined) =>
+              JSON.stringify(body?.["changes"]).includes('"value":null'),
+          })),
+        );
+        yield* stack.deploy(preview(SHARED));
+        expect(fake.defaults.map((row) => row.name).sort()).toEqual([PREVIEW_ONLY, SHARED]);
+        yield* stack.deploy(preview(SHARED));
+        expect(fake.defaults.map((row) => row.name)).toEqual([SHARED]);
+      }),
+  );
+
   test.provider("keeps the default when a refused rename is reverted", (stack) =>
     Effect.gen(function* () {
       const fake = new FakeConvex().install();

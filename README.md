@@ -152,12 +152,14 @@ the Convex dashboard.
 - `Convex.EnvironmentVariable`: `{ deployment, deployKey, name, value }`. One variable on one
   deployment, set through the deployment API with that deployment's key. An existing variable with
   the same name is adopted and overwritten only with `--adopt`. A new `name` or `deployment` is an
-  update: the provider writes the new variable, then removes the old one.
+  update: the provider writes the new variable, then removes the old one. When that removal fails,
+  the old variable stays in the `staleVariables` output, and the next deploy or the delete removes
+  it. Read and delete use the deploy key in the outputs, not the props.
 - `Convex.DefaultEnvironmentVariable`: `{ projectId, name, value, deploymentType }`. A project
   default that new deployments of that type inherit. Use it for preview and dev deployments. An
   existing default with the same name and type is adopted and overwritten only with `--adopt`. A
   new `projectId`, `name`, or `deploymentType` is an update: the provider writes the new default,
-  then removes the old one.
+  then removes the old one, and retries a failed removal on the next deploy (`staleDefaults`).
 - `Convex.Deploy`: `{ cwd?, env?, deployKey, previewName?, previewCreate?, previewRun?, extraArgs?,
 memo?, timeout? }`. Runs `npx convex deploy` with `CONVEX_DEPLOY_KEY` set and parses the
   deployment URL from the CLI output. Outputs `url`, `deploymentName`, `hash`. Memoized by content

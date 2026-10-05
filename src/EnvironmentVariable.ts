@@ -14,6 +14,12 @@
 // writes the new variable first and then removes the one that state names.
 // A replacement would let the engine delete an old generation that has the
 // same name as the live one, for example after a refused rename is reverted.
+// When that removal fails, the attributes keep the old variable in
+// `staleVariables`, and the next deploy and the delete remove it.
+//
+// The attributes keep the deploy key of the variable's deployment. After a
+// refused move, the props name the other deployment and its key, so read and
+// delete use the attributes, not the props.
 import { createDeploymentClient } from "@convex-dev/platform";
 import { Resource } from "alchemy";
 import { OwnedBySomeoneElse, Unowned } from "alchemy/AdoptPolicy";
@@ -32,14 +38,14 @@ import {
 import type { Providers } from "./Providers.ts";
 
 /**
- * Attributes when the listing has `name`. Own keys only: a valid variable
- * name such as `toString` must not match the object prototype.
+ * The variable's identity when the listing has `name`. Own keys only: a
+ * valid variable name such as `toString` must not match the object prototype.
  */
 export const findVariable = (
   list: typeof EnvironmentVariableList.Type,
   deployment: string,
   name: string,
-): EnvironmentVariableAttributes | undefined =>
+): { readonly deployment: string; readonly name: string } | undefined =>
   Object.hasOwn(list.environmentVariables, name) ? { deployment, name } : undefined;
 
 /**
@@ -81,7 +87,7 @@ export const EnvironmentVariableList = Schema.Struct({
   environmentVariables: Schema.Record(Schema.String, Schema.String),
 });
 
-/** Attributes of the variable on the deployment, or undefined when the variable or the deployment is absent. */
+/** The variable's identity, or undefined when the variable or the deployment is absent. */
 const readVariable = (
   api: ManagementApiService,
   deployment: string,
@@ -110,9 +116,21 @@ export interface EnvironmentVariableProps {
   readonly value: string | Redacted.Redacted<string>;
 }
 
+/** A variable of an earlier name or deployment that a rename or a move did not remove yet. */
+export interface StaleVariable {
+  readonly deployment: string;
+  readonly name: string;
+  /** Deploy key for `deployment`. */
+  readonly deployKey: Redacted.Redacted<string>;
+}
+
 export interface EnvironmentVariableAttributes {
   readonly deployment: string;
   readonly name: string;
+  /** Deploy key for `deployment`, for read and delete. Undefined in state from 0.1.x. */
+  readonly deployKey: Redacted.Redacted<string> | undefined;
+  /** Variables that a rename or a move did not remove yet. The next deploy and the delete remove them. */
+  readonly staleVariables: ReadonlyArray<StaleVariable> | undefined;
 }
 
 export type EnvironmentVariable = Resource<
@@ -124,25 +142,72 @@ export type EnvironmentVariable = Resource<
 >;
 export const EnvironmentVariable = Resource<EnvironmentVariable>("Convex.EnvironmentVariable");
 
+/**
+ * The deploy key for the variable in state: from the attributes, or, for
+ * state from 0.1.x, from props that name the same deployment.
+ */
+const keyOf = (
+  output: EnvironmentVariableAttributes,
+  olds: EnvironmentVariableProps | undefined,
+): Redacted.Redacted<string> | undefined =>
+  output.deployKey ?? (olds?.deployment === output.deployment ? olds.deployKey : undefined);
+
+/** Removes the variables and returns the ones that are still there, each with a warning. */
+const removeStale = (stale: ReadonlyArray<StaleVariable>) =>
+  Effect.forEach(stale, (old) =>
+    absentAsUndefined(updateVariable(old.deployment, old.deployKey, old.name, null)).pipe(
+      Effect.as<ReadonlyArray<StaleVariable>>([]),
+      Effect.catchTag("ConvexApiError", (error) =>
+        Effect.logWarning(
+          `Environment variable ${old.name} on deployment ${old.deployment} is not removed yet: ${error.message}. The next deploy tries again.`,
+        ).pipe(Effect.as([old])),
+      ),
+    ),
+  ).pipe(Effect.map((left) => left.flat()));
+
 export const EnvironmentVariableProvider = () =>
   Provider.effect(
     EnvironmentVariable,
     Effect.gen(function* () {
       const api = yield* ManagementApi;
 
-      // No diff: the engine updates when any prop changed and compares
-      // Redacted values, such as the value and the deploy key, by content.
       return {
+        // A variable that a rename did not remove yet needs an update, which
+        // removes it. Otherwise the engine updates when any prop changed and
+        // compares Redacted values, such as the value and the deploy key, by
+        // content.
+        diff: ({ output }) =>
+          Effect.succeed(
+            output?.staleVariables !== undefined && output.staleVariables.length > 0
+              ? ({ action: "update" } as const)
+              : undefined,
+          ),
+
         read: Effect.fn(function* ({ olds, output }) {
+          if (output !== undefined) {
+            const key = keyOf(output, olds);
+            // Without a key for the deployment in state, keep the state as it is.
+            if (key === undefined) return output;
+            const found = yield* readVariable(api, output.deployment, key, output.name);
+            return found === undefined ? undefined : output;
+          }
           const found = yield* readVariable(api, olds.deployment, olds.deployKey, olds.name);
           // No state: the variable belongs to someone else until the user passes --adopt.
-          return found === undefined || output !== undefined ? found : Unowned(found);
+          return found === undefined
+            ? undefined
+            : Unowned({ ...found, deployKey: olds.deployKey, staleVariables: undefined });
         }),
 
         reconcile: Effect.fn(function* ({ fqn, olds, news, output }) {
+          const sameAs = (variable: { readonly deployment: string; readonly name: string }) =>
+            variable.deployment === news.deployment && variable.name === news.name;
+          // A rename back to a name that a failed cleanup left is still ours.
+          const stale = (output?.staleVariables ?? []).filter((old) => !sameAs(old));
+          const owned =
+            (output !== undefined && sameAs(output)) ||
+            stale.length !== (output?.staleVariables?.length ?? 0);
           const write = writeVariable(news.deployment, news.deployKey, news.name, news.value);
-          const inState = output?.deployment === news.deployment && output.name === news.name;
-          if (inState || (yield* shouldAdopt(fqn))) {
+          if (owned || (yield* shouldAdopt(fqn))) {
             // In state, or adopted: the variable is ours to set.
             yield* retryIdempotentWrite(write);
           } else {
@@ -170,30 +235,44 @@ export const EnvironmentVariableProvider = () =>
               }),
             );
           }
-          if (output !== undefined && !inState) {
-            // A rename or a move: remove the variable that state names, now
-            // that the new one is written. Only a key for that deployment can.
-            const key =
-              output.deployment === news.deployment
-                ? news.deployKey
-                : olds?.deployment === output.deployment
-                  ? olds.deployKey
-                  : undefined;
+          if (output !== undefined && !sameAs(output)) {
+            // A rename or a move: the variable that state names is now stale.
+            const key = keyOf(output, olds);
             if (key === undefined) {
               yield* Effect.logWarning(
                 `Environment variable ${output.name} on deployment ${output.deployment} stays: Alchemy has no deploy key for that deployment. Remove it in the Convex dashboard.`,
               );
             } else {
-              yield* absentAsUndefined(updateVariable(output.deployment, key, output.name, null));
+              stale.push({ deployment: output.deployment, name: output.name, deployKey: key });
             }
           }
-          return { deployment: news.deployment, name: news.name };
+          const left = yield* removeStale(stale);
+          return {
+            deployment: news.deployment,
+            name: news.name,
+            deployKey: news.deployKey,
+            staleVariables: left.length === 0 ? undefined : left,
+          };
         }),
 
         delete: Effect.fn(function* ({ olds, output }) {
+          const key = keyOf(output, olds);
+          if (key === undefined) {
+            yield* Effect.logWarning(
+              `Environment variable ${output.name} on deployment ${output.deployment} stays: Alchemy has no deploy key for that deployment. Remove it in the Convex dashboard.`,
+            );
+          }
+          const all = [
+            ...(key === undefined
+              ? []
+              : [{ deployment: output.deployment, name: output.name, deployKey: key }]),
+            ...(output.staleVariables ?? []),
+          ];
           // Removing an absent variable succeeds; 404 means the deployment is gone.
-          yield* absentAsUndefined(
-            updateVariable(output.deployment, olds.deployKey, output.name, null),
+          yield* Effect.forEach(all, (variable) =>
+            absentAsUndefined(
+              updateVariable(variable.deployment, variable.deployKey, variable.name, null),
+            ),
           );
         }),
       };

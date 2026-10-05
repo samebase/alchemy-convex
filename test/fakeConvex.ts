@@ -82,8 +82,16 @@ export class FakeConvex {
    */
   readonly scripted = new Map<
     string,
-    { status: number; body: unknown; meanwhile?: () => void }[]
+    {
+      status: number;
+      body: unknown;
+      /** Answers only a request whose body matches. Other requests pass by. */
+      when?: (body: Record<string, unknown> | undefined) => boolean;
+      meanwhile?: () => void;
+    }[]
   >();
+  /** The deploy key that the deployment API accepts, for each deployment that has one here. */
+  readonly deploymentKeys = new Map<string, string>();
   /** Page size of GET /teams/{team_id}/projects. */
   pageSize = 100;
   /** Rows that GET /teams/{team_id}/projects leaves out while this is above zero, one call at a time. */
@@ -135,25 +143,37 @@ export class FakeConvex {
     const body = Schema.decodeUnknownSync(RequestBody)(text === "" ? undefined : JSON.parse(text));
     const path = `${url.host}${url.pathname}`;
     this.sent.push({ method: request.method, path, query: url.searchParams, body });
-    const next = this.scripted.get(`${request.method} ${path}`)?.shift();
+    const queue = this.scripted.get(`${request.method} ${path}`) ?? [];
+    const index = queue.findIndex((entry) => entry.when === undefined || entry.when(body));
+    const [next] = index === -1 ? [] : queue.splice(index, 1);
     if (next !== undefined) {
       // A change that another writer makes while this request runs.
       next.meanwhile?.();
       return json(next.status, next.body);
     }
-    const bearer = (request.headers.get("Authorization") ?? "").replace(/^Bearer /, "");
-    return this.route(request.method, url, body, bearer);
+    return this.route(request.method, url, body, request.headers.get("Authorization") ?? "");
   };
 
   private route(
     method: string,
     url: URL,
     body: Record<string, unknown> | undefined,
-    bearer: string,
+    authorization: string,
   ): Response {
     const deploymentHost = /^([a-z0-9-]+)\.convex\.cloud$/.exec(url.host);
-    if (deploymentHost !== null)
-      return this.deploymentApi(deploymentHost[1] ?? "", method, url, body);
+    if (deploymentHost !== null) {
+      const deployment = deploymentHost[1] ?? "";
+      const key = this.deploymentKeys.get(deployment);
+      if (key !== undefined && authorization !== `Convex ${key}`) {
+        return json(401, {
+          ...recorded("project_not_found.json"),
+          code: "Unauthorized",
+          message: `The deploy key is not for ${deployment} (fake)`,
+        });
+      }
+      return this.deploymentApi(deployment, method, url, body);
+    }
+    const bearer = authorization.replace(/^Bearer /, "");
     const route = `${method} ${url.pathname.replace(/\/\d+(?=\/|$)/g, "/{id}")}`;
     const id = Number(/\/(\d+)(?:\/|$)/.exec(url.pathname)?.[1]);
     const deployment = /^\/v1\/deployments\/([^/]+)\//.exec(url.pathname)?.[1] ?? "";
