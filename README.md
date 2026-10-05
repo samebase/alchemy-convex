@@ -131,16 +131,21 @@ memo?, timeout? }`. Runs `npx convex deploy` with `CONVEX_DEPLOY_KEY` set and pa
 ```sh
 pnpm install
 pnpm run check            # format, lint, typecheck, unit tests
-pnpm run build            # lib/ with declarations
+pnpm run build            # lib/ with declarations, then publint and attw
 pnpm run test:live        # real API calls, see below
 ```
 
+Use Node 24 (`.node-version`) and pnpm 11. `pnpm install` also installs a pre-commit hook that
+runs `vp staged`.
+
 Unit tests run against recorded Management API payloads in `test/fixtures/management/`. Live tests
-need `ALCHEMY_CONVEX_LIVE=1`, a Convex login or `CONVEX_ACCESS_TOKEN`, and a throwaway project.
+run only with `ALCHEMY_CONVEX_LIVE=1`, which `pnpm run test:live` sets. They need a Convex login or
+`CONVEX_ACCESS_TOKEN`, and a throwaway project.
 Point them at yours with `ALCHEMY_CONVEX_LIVE_TEAM`, `ALCHEMY_CONVEX_LIVE_PROJECT_ID`,
 `ALCHEMY_CONVEX_LIVE_DEPLOYMENT`, and `ALCHEMY_CONVEX_LIVE_PROJECT_DIR` (a Convex app directory for
 the deploy test). They create resources named `tmp-alchemy-convex-*` and remove them again.
 
-Releases: push a `v*` tag; `.github/workflows/release.yml` publishes with npm trusted publishing.
+Releases: change `version` in `package.json` in a pull request. After the merge,
+`.github/workflows/release.yml` publishes that version from `main` with npm trusted publishing.
 
 License: Apache 2.0.
