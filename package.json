@@ -1,7 +1,18 @@
 {
   "name": "@samebase/alchemy-convex",
   "version": "0.1.0",
-  "description": "Community Convex provider for Alchemy v2: projects, deploy keys, environment variables, and a deploy step",
+  "description": "Convex resources for Alchemy v2: projects, deploy keys, environment variables, and a deploy step",
+  "keywords": [
+    "alchemy",
+    "cloudflare",
+    "convex",
+    "effect",
+    "infrastructure-as-code"
+  ],
+  "homepage": "https://github.com/samebase/alchemy-convex#readme",
+  "bugs": {
+    "url": "https://github.com/samebase/alchemy-convex/issues"
+  },
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -14,11 +25,16 @@
     "LICENSE"
   ],
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./lib/index.d.ts",
       "import": "./lib/index.js"
     }
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   },
   "scripts": {
     "check": "vp fmt --check && vp lint && pnpm run typecheck && vp test --run",

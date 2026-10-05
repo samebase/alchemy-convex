@@ -11,11 +11,12 @@ import { describe, expect, it } from "vitest";
 import { fromConfig } from "../../src/Credentials.ts";
 import { parseDeployOutput } from "../../src/Deploy.ts";
 import { absentAsUndefined, ManagementApi, ManagementApiLive } from "../../src/ManagementApi.ts";
+import { liveTargets } from "./env.ts";
 
 const live = process.env.ALCHEMY_CONVEX_LIVE === "1";
 
 /** Dev deployment of the throwaway project 3145389 in team `samebase-live-tests`. */
-const DEPLOYMENT = "beaming-okapi-932";
+const DEPLOYMENT = liveTargets.deployment;
 
 /**
  * Convex project whose `convex/` functions already run on {@link DEPLOYMENT},

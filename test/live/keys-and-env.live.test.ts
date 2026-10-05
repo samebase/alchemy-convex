@@ -12,6 +12,7 @@ import { assert, describe, expect, it } from "vitest";
 import { fromConfig } from "../../src/Credentials.ts";
 import { CreatedDeployKey, DeployKeyList, selectCreatedKey } from "../../src/DeployKey.ts";
 import {
+import { liveTargets } from "./env.ts";
   EnvironmentVariableList,
   findVariable,
   updateVariable,
@@ -20,8 +21,7 @@ import { absentAsUndefined, ManagementApi, ManagementApiLive } from "../../src/M
 import { CreatedPreviewDeployKey, PreviewDeployKeyList } from "../../src/PreviewDeployKey.ts";
 
 /** Dev deployment of the throwaway project tmp-alchemy-spike-base. */
-const deployment = "beaming-okapi-932";
-const projectId = 3145389;
+const { deployment, projectId } = liveTargets;
 
 const roundTrip = Effect.gen(function* () {
   const api = yield* ManagementApi;
