@@ -1,6 +1,6 @@
 {
   "name": "@samebase/alchemy-convex",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Convex resources for Alchemy v2: projects, deploy keys, environment variables, and a deploy step",
   "keywords": [
     "alchemy",

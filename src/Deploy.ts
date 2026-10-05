@@ -12,6 +12,7 @@ import { havePropsChanged, isResolved } from "alchemy/Diff";
 import * as Provider from "alchemy/Provider";
 import * as Effect from "effect/Effect";
 import type * as Redacted from "effect/Redacted";
+import * as Schema from "effect/Schema";
 import type { Providers } from "./Providers.ts";
 
 export interface DeployProps extends Pick<CommandRunProps, "cwd" | "env" | "timeout"> {
@@ -46,7 +47,9 @@ export interface DeployProps extends Pick<CommandRunProps, "cwd" | "env" | "time
    * Files hashed to skip an unchanged push. By default every non-gitignored
    * file under `cwd` and the nearest lockfile. Use
    * `{ include: ["convex/**"], lockfile: true }` to ignore frontend changes,
-   * or `false` to push on every deploy.
+   * or `false` to push on every deploy. A preview deploy (`previewName` or
+   * `previewCreate`) pushes on every deploy: Convex can delete an expired
+   * preview deployment, and the hash cannot show that.
    * @default true
    */
   readonly memo?: MemoOptions | boolean;
@@ -99,6 +102,26 @@ export const deployArgs = (
 /** Number of output lines quoted when the CLI exits 0 without the deployed line. */
 const OUTPUT_TAIL_LINES = 20;
 
+/** A `convex deploy` argument contains whitespace, which Alchemy's command runner splits on. */
+export class DeployArgumentError extends Schema.TaggedError<DeployArgumentError>()(
+  "DeployArgumentError",
+  { argument: Schema.String },
+) {
+  override get message() {
+    return `Convex.Deploy argument "${this.argument}" contains whitespace, and Alchemy splits the command on whitespace. Use the --flag=value form, such as --typecheck=disable, and names without spaces.`;
+  }
+}
+
+/** `npx convex deploy` exited 0 but did not print the deployment URL. */
+export class DeployOutputError extends Schema.TaggedError<DeployOutputError>()(
+  "DeployOutputError",
+  { outputTail: Schema.String },
+) {
+  override get message() {
+    return `npx convex deploy exited 0 but printed no "Deployed Convex functions to <url>" line, so Convex.Deploy has no deployment URL. Remove --dry-run from extraArgs if it is there, and read the CLI output. Last output:\n${this.outputTail}`;
+  }
+}
+
 export const DeployProvider = () =>
   Provider.effect(
     Deploy,
@@ -120,7 +143,16 @@ export const DeployProvider = () =>
         // under the same name.
         diff: Effect.fn(function* ({ olds, news, output }) {
           if (!isResolved(news)) return undefined;
-          if (output === undefined || output.hash === undefined || havePropsChanged(olds, news)) {
+          // A preview deployment can expire. The same hash then hides a
+          // missing deployment, so a preview always pushes. The CLI reuses
+          // a live preview with the same name.
+          const preview = news.previewName !== undefined || news.previewCreate !== undefined;
+          if (
+            preview ||
+            output === undefined ||
+            output.hash === undefined ||
+            havePropsChanged(olds, news)
+          ) {
             return { action: "update" } as const;
           }
           return { action: (yield* hashOf(news)) === output.hash ? "noop" : "update" } as const;
@@ -129,13 +161,7 @@ export const DeployProvider = () =>
         reconcile: Effect.fn(function* ({ news, session }) {
           const args = deployArgs(news);
           const spaced = args.find((arg) => /\s/.test(arg));
-          if (spaced !== undefined) {
-            return yield* Effect.die(
-              new Error(
-                `Convex.Deploy argument "${spaced}" contains whitespace; Alchemy splits commands on whitespace`,
-              ),
-            );
-          }
+          if (spaced !== undefined) return yield* new DeployArgumentError({ argument: spaced });
           // A push is idempotent: the CLI uploads the full function set every time.
           const { stdout, stderr } = yield* run(
             {
@@ -150,16 +176,12 @@ export const DeployProvider = () =>
           const output = `${stdout}\n${stderr}`;
           const deployed = parseDeployOutput(output);
           if (deployed === undefined) {
-            const tail = stripVTControlCharacters(output)
+            const outputTail = stripVTControlCharacters(output)
               .split(/\r?\n|\r/)
               .filter((line) => line.trim() !== "")
               .slice(-OUTPUT_TAIL_LINES)
               .join("\n");
-            return yield* Effect.die(
-              new Error(
-                `npx convex deploy exited 0 but printed no "Deployed Convex functions to <url>" line. Last output:\n${tail}`,
-              ),
-            );
+            return yield* new DeployOutputError({ outputTail });
           }
           return { ...deployed, hash: yield* hashOf(news) };
         }),

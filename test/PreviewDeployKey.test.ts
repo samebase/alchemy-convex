@@ -1,8 +1,13 @@
 import { readFileSync } from "node:fs";
+import * as Test from "alchemy/Test/Vitest";
+import * as Effect from "effect/Effect";
+import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
-import { selectCreatedKey } from "../src/DeployKey.ts";
+import { keysListedAs } from "../src/DeployKey.ts";
+import * as Convex from "../src/index.ts";
 import { CreatedPreviewDeployKey, PreviewDeployKeyList } from "../src/PreviewDeployKey.ts";
+import { FakeConvex } from "./fakeConvex.ts";
 
 const fixture = (file: string): unknown =>
   JSON.parse(readFileSync(new URL(`./fixtures/management/${file}`, import.meta.url), "utf8"));
@@ -34,10 +39,10 @@ describe("PreviewDeployKeyList", () => {
 
   it("decodes a listing with a key and finds it by requested name", () => {
     const { items } = Schema.decodeUnknownSync(PreviewDeployKeyList)(listBody(recordedRows()));
-    expect(selectCreatedKey(items, "tmp-alchemy-convex-fixture")?.name).toBe(
+    expect(keysListedAs(items, "tmp-alchemy-convex-fixture").map((key) => key.name)).toEqual([
       "tmp-alchemy-convex-fixture (0e71106d)",
-    );
-    expect(selectCreatedKey(items, "ci")).toBeUndefined();
+    ]);
+    expect(keysListedAs(items, "ci")).toEqual([]);
   });
 
   it("rejects a body without items", () => {
@@ -91,4 +96,58 @@ describe("CreatedPreviewDeployKey", () => {
       }),
     ).toThrow();
   });
+});
+
+describe("Convex.PreviewDeployKey through the engine", () => {
+  const { test } = Test.make({
+    providers: Convex.providers(Convex.fromToken(Redacted.make("test-token"))),
+  });
+  /** The project of the recorded payloads. */
+  const projectId = 3145389;
+
+  test.provider("two preview keys with one name never delete each other", (stack) =>
+    Effect.gen(function* () {
+      const fake = new FakeConvex().install();
+      const both = yield* stack.deploy(
+        Effect.gen(function* () {
+          const a = yield* Convex.PreviewDeployKey("PreviewA", { projectId, name: "ci" });
+          const b = yield* Convex.PreviewDeployKey("PreviewB", { projectId, name: "ci" });
+          return { a: a.uniqueName, aKey: a.previewDeployKey, b: b.uniqueName };
+        }),
+      );
+      expect(both.a).not.toBe(both.b);
+      const from = fake.sent.length;
+      yield* stack.deploy(
+        Effect.gen(function* () {
+          const b = yield* Convex.PreviewDeployKey("PreviewB", { projectId, name: "ci" });
+          return { b: b.uniqueName };
+        }),
+      );
+      const deletes = fake.sent
+        .slice(from)
+        .filter((request) => request.path.endsWith("/delete_preview_deploy_key"));
+      expect(deletes.map((request) => request.body)).toEqual([{ id: Redacted.value(both.aKey) }]);
+      expect(fake.previewKeys.get(projectId)?.map((key) => key.name)).toEqual([both.b]);
+    }),
+  );
+
+  test.provider("retries a delete that Convex answers with a 500", (stack) =>
+    Effect.gen(function* () {
+      const fake = new FakeConvex().install();
+      yield* stack.deploy(
+        Effect.gen(function* () {
+          const key = yield* Convex.PreviewDeployKey("Preview", { projectId, name: "ci" });
+          return { name: key.uniqueName };
+        }),
+      );
+      fake.scripted.set(`POST api.convex.dev/v1/projects/${projectId}/delete_preview_deploy_key`, [
+        { status: 500, body: fixture("project_delete_preview_deploy_key_500.json") },
+      ]);
+      yield* stack.destroy();
+      expect(
+        fake.lines().filter((line) => line.endsWith("/delete_preview_deploy_key")).length,
+      ).toBe(2);
+      expect(fake.previewKeys.get(projectId)).toEqual([]);
+    }),
+  );
 });

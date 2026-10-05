@@ -14,8 +14,10 @@ export {
 } from "./DefaultEnvironmentVariable.ts";
 export {
   Deploy,
+  DeployArgumentError,
   type DeployAttributes,
   deployArgs,
+  DeployOutputError,
   type DeployProps,
   parseDeployOutput,
 } from "./Deploy.ts";
@@ -23,12 +25,15 @@ export {
   DeployKey,
   type DeployKeyAction,
   type DeployKeyAttributes,
+  DeployKeyIsCredential,
   type DeployKeyProps,
+  DeployKeyRecoveryRequired,
 } from "./DeployKey.ts";
 export {
   EnvironmentVariable,
   type EnvironmentVariableAttributes,
   type EnvironmentVariableProps,
+  VariableIdentityChange,
 } from "./EnvironmentVariable.ts";
 export { ConvexApiError, ManagementApi } from "./ManagementApi.ts";
 export {
@@ -37,9 +42,13 @@ export {
   type PreviewDeployKeyProps,
 } from "./PreviewDeployKey.ts";
 export {
+  AmbiguousProject,
+  CreatedProjectNotFound,
   type DeploymentRegion,
   Project,
+  ProjectDeploymentChange,
   type ProjectAttributes,
   type ProjectProps,
+  ProjectTeamChange,
 } from "./Project.ts";
 export { Providers, providers } from "./Providers.ts";

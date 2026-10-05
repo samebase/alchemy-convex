@@ -9,6 +9,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import { Credentials } from "./Credentials.ts";
 
@@ -70,7 +71,18 @@ export interface ManagementApiService {
   ) => Effect.Effect<T, ConvexApiError>;
   /** Team id for a slug or numeric id. */
   readonly resolveTeamId: (team: string | number) => Effect.Effect<number, ConvexApiError>;
+  /**
+   * True when a deploy key that Convex returned carries the token of the
+   * Management API credential itself. With an OAuth token, create_deploy_key
+   * and create_preview_deploy_key create no new key: they return the OAuth
+   * token with a new prefix, and the part after "|" is the same. A delete of
+   * that key would revoke the credential.
+   */
+  readonly isCredentialToken: (secret: string) => Effect.Effect<boolean>;
 }
+
+/** The part of a Convex token after the first "|", or the whole value when it has none. */
+const tokenPart = (value: string) => value.slice(value.indexOf("|") + 1);
 
 export class ManagementApi extends Context.Service<ManagementApi, ManagementApiService>()(
   "@samebase/alchemy-convex/ManagementApi",
@@ -109,6 +121,43 @@ export const settleVoid = (
     Effect.flatMap((result) =>
       result.response.ok ? Effect.void : Effect.fail(toApiError(operation, result)),
     ),
+  );
+
+/**
+ * True when an idempotent write can succeed on a new attempt:
+ *
+ * - A Convex write conflict. Two parallel update_environment_variables calls
+ *   on one deployment gave HTTP 503 `OptimisticConcurrencyControlFailure`,
+ *   "Data read or written in this mutation changed while it was being run",
+ *   in a live run. The platform codes `OCC` and `WriteConflict` and the
+ *   message "... changed while this mutation was being run ..." mean the same.
+ * - Any other 5xx answer. Two parallel delete_preview_deploy_key calls on one
+ *   project gave HTTP 500 `InternalServerError`, "Your request couldn't be
+ *   completed. Try again later.", in a live run. The next attempt succeeded.
+ */
+export const isRetryableWriteError = (error: ConvexApiError): boolean =>
+  error.code === "OptimisticConcurrencyControlFailure" ||
+  error.code === "OCC" ||
+  error.code === "WriteConflict" ||
+  /changed while (it|this mutation) was being run/.test(error.message) ||
+  error.status >= 500;
+
+/**
+ * Runs an idempotent write again after a retryable Convex error: at most
+ * four more attempts, with exponential backoff from 100 ms and jitter. Other
+ * errors fail at once, and so does the last retryable error. Use it only for
+ * a write that has the same result when it runs twice, such as setting a
+ * value or deleting by id. Never for a create that does not check first.
+ */
+export const retryIdempotentWrite = <A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E, R> =>
+  effect.pipe(
+    Effect.retry({
+      while: (error: E) => error instanceof ConvexApiError && isRetryableWriteError(error),
+      times: 4,
+      schedule: Schedule.exponential("100 millis").pipe(Schedule.jittered),
+    }),
   );
 
 /** Turns a 404 into `undefined` so read and delete stay idempotent. */
@@ -188,6 +237,13 @@ export const ManagementApiLive = (): Layer.Layer<ManagementApi, never, Credentia
           return match.id;
         });
 
-      return { request, requestVoid, deploymentRequest, resolveTeamId };
+      const isCredentialToken: ManagementApiService["isCredentialToken"] = (secret) =>
+        credentials.pipe(
+          Effect.map(
+            (resolved) => tokenPart(Redacted.value(resolved.accessToken)) === tokenPart(secret),
+          ),
+        );
+
+      return { request, requestVoid, deploymentRequest, resolveTeamId, isCredentialToken };
     }),
   );

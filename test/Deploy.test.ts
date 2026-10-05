@@ -1,5 +1,22 @@
-import { describe, expect, it } from "vitest";
-import { deployArgs, parseDeployOutput } from "../src/Deploy.ts";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { CommandExecutor } from "alchemy/Command";
+import { hashDirectory } from "alchemy/Command/Memo";
+import * as Provider from "alchemy/Provider";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Redacted from "effect/Redacted";
+import * as Schema from "effect/Schema";
+import { afterAll, describe, expect, it } from "vitest";
+import {
+  type Deploy,
+  type DeployProps,
+  DeployProvider,
+  deployArgs,
+  parseDeployOutput,
+} from "../src/Deploy.ts";
 
 // Real `npx convex deploy` stderr (convex 1.45.0) through pipes, as Alchemy's
 // CommandExecutor receives it, against the throwaway dev deployment
@@ -148,5 +165,67 @@ describe("deployArgs", () => {
       "--typecheck=disable",
       "--codegen=disable",
     ]);
+  });
+});
+
+describe("Deploy diff", () => {
+  const { deployKey } = Schema.decodeUnknownSync(Schema.Struct({ deployKey: Schema.String }))(
+    JSON.parse(
+      readFileSync(
+        new URL("./fixtures/management/deployment_create_deploy_key.json", import.meta.url),
+        "utf8",
+      ),
+    ),
+  );
+  /** A Convex app directory whose hash the last push recorded. */
+  const cwd = mkdtempSync(join(tmpdir(), "alchemy-convex-deploy-"));
+  writeFileSync(join(cwd, "convex.json"), "{}\n");
+  afterAll(() => rmSync(cwd, { recursive: true }));
+
+  /** The diff never runs a command. */
+  const noCommands = Layer.succeed(CommandExecutor, {
+    spawn: () => Effect.die("Deploy diff spawned a command"),
+    run: () => Effect.die("Deploy diff ran a command"),
+  });
+  /** The diff of unchanged props after a push of the same files. */
+  const diffOf = (props: Omit<DeployProps, "deployKey" | "cwd">) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* Provider.Provider<Deploy>("Convex.Deploy");
+        const news = { ...props, deployKey: Redacted.make(deployKey), cwd };
+        const hash = yield* hashDirectory({ cwd, memo: {} });
+        return yield* (
+          service.diff?.({
+            id: "Backend",
+            fqn: "Backend",
+            instanceId: "instance-1",
+            olds: news,
+            news,
+            oldBindings: [],
+            newBindings: [],
+            output: {
+              url: "https://flippant-cardinal-923.convex.cloud",
+              deploymentName: "flippant-cardinal-923",
+              hash,
+            },
+          }) ?? Effect.void
+        );
+      }).pipe(
+        Effect.provide(DeployProvider().pipe(Layer.provide(noCommands))),
+        // The hash reads files.
+        Effect.provide(NodeServices.layer),
+      ),
+    );
+
+  it("skips the push of unchanged files to a deployment", async () => {
+    expect(await diffOf({})).toEqual({ action: "noop" });
+  });
+
+  it("always pushes a named preview, because the preview can have expired", async () => {
+    expect(await diffOf({ previewName: "feature-login" })).toEqual({ action: "update" });
+  });
+
+  it("always pushes a recreated preview", async () => {
+    expect(await diffOf({ previewCreate: "pr-42" })).toEqual({ action: "update" });
   });
 });
