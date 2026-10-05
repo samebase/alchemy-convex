@@ -1,7 +1,19 @@
 import { readFileSync } from "node:fs";
+import * as Test from "alchemy/Test/Vitest";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
-import { DefaultEnvironmentVariableList, findDefault } from "../src/DefaultEnvironmentVariable.ts";
+import { fromToken } from "../src/Credentials.ts";
+import {
+  DefaultEnvironmentVariableList,
+  findDefault,
+  updateDefault,
+} from "../src/DefaultEnvironmentVariable.ts";
+import * as Convex from "../src/index.ts";
+import { ManagementApi, ManagementApiLive } from "../src/ManagementApi.ts";
+import { FakeConvex } from "./fakeConvex.ts";
 
 const fixture = (file: string): unknown =>
   JSON.parse(readFileSync(new URL(`./fixtures/management/${file}`, import.meta.url), "utf8"));
@@ -73,4 +85,53 @@ describe("findDefault", () => {
   it("returns undefined for a name that is not listed", () => {
     expect(findDefault(list, PROJECT_ID, "SITE_URL", "preview")).toBeUndefined();
   });
+});
+
+const UPDATE = `POST api.convex.dev/v1/projects/${PROJECT_ID}/update_default_environment_variables`;
+
+describe("updateDefault", () => {
+  it("writes again after a write conflict", async () => {
+    const fake = new FakeConvex().install();
+    // The recorded conflict of the deployment API, sent by the Management API.
+    fake.scripted.set(UPDATE, [
+      { status: 503, body: fixture("deployment_update_environment_variables_conflict.json") },
+    ]);
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const api = yield* ManagementApi;
+        yield* updateDefault(api, PROJECT_ID, PREVIEW_ONLY, "preview", "value");
+      }).pipe(
+        Effect.provide(ManagementApiLive().pipe(Layer.provide(fromToken(Redacted.make("t"))))),
+      ),
+    );
+    expect(fake.lines()).toEqual([UPDATE, UPDATE]);
+    expect(fake.defaults).toEqual([
+      { projectId: PROJECT_ID, name: PREVIEW_ONLY, deploymentType: "preview" },
+    ]);
+  });
+});
+
+describe("Convex.DefaultEnvironmentVariable through the engine", () => {
+  const { test } = Test.make({
+    providers: Convex.providers(Convex.fromToken(Redacted.make("test-token"))),
+  });
+
+  test.provider("overwrites a default that is not in state only with adoption", (stack) =>
+    Effect.gen(function* () {
+      const fake = new FakeConvex().install();
+      fake.defaults.push({ projectId: PROJECT_ID, name: PREVIEW_ONLY, deploymentType: "preview" });
+      const refused = yield* Effect.flip(
+        stack.deploy(
+          Convex.DefaultEnvironmentVariable("Default", {
+            projectId: PROJECT_ID,
+            name: PREVIEW_ONLY,
+            deploymentType: "preview",
+            value: "new value",
+          }).pipe(Effect.as({})),
+        ),
+      );
+      expect(refused).toMatchObject({ _tag: "OwnedBySomeoneElse" });
+      expect(fake.lines().filter((line) => line === UPDATE)).toEqual([]);
+    }),
+  );
 });

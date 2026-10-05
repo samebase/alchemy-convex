@@ -5,14 +5,26 @@
 // deploy key, not with the Management API token. Setting a variable and
 // removing it are the same call: update_environment_variables with
 // `value: null` removes the variable.
+//
+// A variable that exists but is not in state belongs to someone else: its
+// old value is lost when this resource writes it. Alchemy takes it over only
+// with --adopt.
 import { createDeploymentClient } from "@convex-dev/platform";
 import { Resource } from "alchemy";
+import { OwnedBySomeoneElse, Unowned } from "alchemy/AdoptPolicy";
 import { isResolved } from "alchemy/Diff";
 import * as Provider from "alchemy/Provider";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import { absentAsUndefined, ManagementApi, settleVoid } from "./ManagementApi.ts";
+import { shouldAdopt } from "./Adoption.ts";
+import {
+  absentAsUndefined,
+  ManagementApi,
+  type ManagementApiService,
+  retryIdempotentWrite,
+  settleVoid,
+} from "./ManagementApi.ts";
 import type { Providers } from "./Providers.ts";
 
 /**
@@ -28,7 +40,10 @@ export const findVariable = (
 
 /**
  * Sets one variable, or removes it when `value` is null. The deployment
- * answers 200 with an empty body, so this reads no response data.
+ * answers 200 with an empty body, so this reads no response data. The call
+ * sets a value, so it runs again after a write conflict or a 5xx answer, for
+ * example when another resource writes a variable of the same deployment at
+ * the same time.
  */
 export const updateVariable = (
   deployment: string,
@@ -36,14 +51,16 @@ export const updateVariable = (
   name: string,
   value: string | Redacted.Redacted<string> | null,
 ) =>
-  settleVoid("update environment variables", () =>
-    createDeploymentClient(deployment, Redacted.value(deployKey)).POST(
-      "/update_environment_variables",
-      {
-        body: {
-          changes: [{ name, value: Redacted.isRedacted(value) ? Redacted.value(value) : value }],
+  retryIdempotentWrite(
+    settleVoid("update environment variables", () =>
+      createDeploymentClient(deployment, Redacted.value(deployKey)).POST(
+        "/update_environment_variables",
+        {
+          body: {
+            changes: [{ name, value: Redacted.isRedacted(value) ? Redacted.value(value) : value }],
+          },
         },
-      },
+      ),
     ),
   );
 
@@ -51,6 +68,26 @@ export const updateVariable = (
 export const EnvironmentVariableList = Schema.Struct({
   environmentVariables: Schema.Record(Schema.String, Schema.String),
 });
+
+/** Attributes of the variable on the deployment, or undefined when the variable or the deployment is absent. */
+const readVariable = (
+  api: ManagementApiService,
+  deployment: string,
+  deployKey: Redacted.Redacted<string>,
+  name: string,
+) =>
+  // 404: the deployment no longer exists, so neither does the variable.
+  absentAsUndefined(
+    api.deploymentRequest("list environment variables", deployment, deployKey, (client) =>
+      client.GET("/list_environment_variables"),
+    ),
+  ).pipe(
+    Effect.map((body) =>
+      body === undefined
+        ? undefined
+        : findVariable(Schema.decodeUnknownSync(EnvironmentVariableList)(body), deployment, name),
+    ),
+  );
 
 export interface EnvironmentVariableProps {
   /** Deployment name, or its URL for deployments outside US East. */
@@ -95,25 +132,26 @@ export const EnvironmentVariableProvider = () =>
           );
         },
 
-        read: Effect.fn(function* ({ olds }) {
-          // 404: the deployment no longer exists, so neither does the variable.
-          const body = yield* absentAsUndefined(
-            api.deploymentRequest(
-              "list environment variables",
-              olds.deployment,
-              olds.deployKey,
-              (client) => client.GET("/list_environment_variables"),
-            ),
-          );
-          if (body === undefined) return undefined;
-          return findVariable(
-            Schema.decodeUnknownSync(EnvironmentVariableList)(body),
-            olds.deployment,
-            olds.name,
-          );
+        read: Effect.fn(function* ({ olds, output }) {
+          const found = yield* readVariable(api, olds.deployment, olds.deployKey, olds.name);
+          // No state: the variable belongs to someone else until the user passes --adopt.
+          return found === undefined || output !== undefined ? found : Unowned(found);
         }),
 
-        reconcile: Effect.fn(function* ({ news }) {
+        reconcile: Effect.fn(function* ({ fqn, news, output }) {
+          if (output === undefined) {
+            // No state, for example after a replacement: the engine did not
+            // read this name in plan. Overwriting a variable that exists loses
+            // its value, so that needs adoption.
+            const existing = yield* readVariable(api, news.deployment, news.deployKey, news.name);
+            if (existing !== undefined && !(yield* shouldAdopt(fqn))) {
+              return yield* new OwnedBySomeoneElse({
+                message: `Environment variable ${news.name} already exists on deployment ${news.deployment}. Re-run with --adopt to take it over and overwrite its value, or use a different name.`,
+                resourceType: EnvironmentVariable.Type,
+                physicalName: news.name,
+              });
+            }
+          }
           yield* updateVariable(news.deployment, news.deployKey, news.name, news.value);
           return { deployment: news.deployment, name: news.name };
         }),

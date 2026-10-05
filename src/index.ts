@@ -14,8 +14,10 @@ export {
 } from "./DefaultEnvironmentVariable.ts";
 export {
   Deploy,
+  DeployArgumentError,
   type DeployAttributes,
   deployArgs,
+  DeployOutputError,
   type DeployProps,
   parseDeployOutput,
 } from "./Deploy.ts";

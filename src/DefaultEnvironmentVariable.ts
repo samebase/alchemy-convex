@@ -6,14 +6,25 @@
 // credential, not with a deploy key. Setting a default and removing it are the
 // same call: update_default_environment_variables with `value: null` removes
 // the default, and removing an absent default also answers 200.
+//
+// A default that exists but is not in state belongs to someone else: its old
+// value is lost when this resource writes it. Alchemy takes it over only with
+// --adopt.
 import { Resource } from "alchemy";
+import { OwnedBySomeoneElse, Unowned } from "alchemy/AdoptPolicy";
 import { isResolved } from "alchemy/Diff";
 import * as Provider from "alchemy/Provider";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import type { components } from "@convex-dev/platform/managementApi";
-import { absentAsUndefined, ManagementApi, type ManagementApiService } from "./ManagementApi.ts";
+import { shouldAdopt } from "./Adoption.ts";
+import {
+  absentAsUndefined,
+  ManagementApi,
+  type ManagementApiService,
+  retryIdempotentWrite,
+} from "./ManagementApi.ts";
 import type { Providers } from "./Providers.ts";
 
 /** Deployment types a default can target, from the generated schema. */
@@ -54,7 +65,9 @@ export const listDefaults = (
 
 /**
  * Sets one default, or removes it when `value` is null. Convex answers 200
- * with an empty body, so this reads no response data.
+ * with an empty body, so this reads no response data. The call sets a value,
+ * so it runs again after a write conflict or a 5xx answer, for example when
+ * another resource writes a default of the same project at the same time.
  */
 export const updateDefault = (
   api: ManagementApiService,
@@ -63,19 +76,35 @@ export const updateDefault = (
   deploymentType: DeploymentType,
   value: string | Redacted.Redacted<string> | null,
 ) =>
-  api.requestVoid("update default environment variables", (client) =>
-    client.POST("/projects/{project_id}/update_default_environment_variables", {
-      params: { path: { project_id: projectId } },
-      body: {
-        changes: [
-          {
-            name,
-            deploymentType,
-            value: Redacted.isRedacted(value) ? Redacted.value(value) : value,
-          },
-        ],
-      },
-    }),
+  retryIdempotentWrite(
+    api.requestVoid("update default environment variables", (client) =>
+      client.POST("/projects/{project_id}/update_default_environment_variables", {
+        params: { path: { project_id: projectId } },
+        body: {
+          changes: [
+            {
+              name,
+              deploymentType,
+              value: Redacted.isRedacted(value) ? Redacted.value(value) : value,
+            },
+          ],
+        },
+      }),
+    ),
+  );
+
+/** Attributes of the default, or undefined when the default or the project is absent. */
+const readDefault = (
+  api: ManagementApiService,
+  projectId: number,
+  name: string,
+  deploymentType: DeploymentType,
+) =>
+  // 404 ProjectNotFound: the project no longer exists, so neither does the default.
+  absentAsUndefined(listDefaults(api, projectId, name, deploymentType)).pipe(
+    Effect.map((list) =>
+      list === undefined ? undefined : findDefault(list, projectId, name, deploymentType),
+    ),
   );
 
 /**
@@ -136,16 +165,31 @@ export const DefaultEnvironmentVariableProvider = () =>
           );
         },
 
-        read: Effect.fn(function* ({ olds }) {
-          // 404 ProjectNotFound: the project no longer exists, so neither does the default.
-          const list = yield* absentAsUndefined(
-            listDefaults(api, olds.projectId, olds.name, olds.deploymentType),
-          );
-          if (list === undefined) return undefined;
-          return findDefault(list, olds.projectId, olds.name, olds.deploymentType);
+        read: Effect.fn(function* ({ olds, output }) {
+          const found = yield* readDefault(api, olds.projectId, olds.name, olds.deploymentType);
+          // No state: the default belongs to someone else until the user passes --adopt.
+          return found === undefined || output !== undefined ? found : Unowned(found);
         }),
 
-        reconcile: Effect.fn(function* ({ news }) {
+        reconcile: Effect.fn(function* ({ fqn, news, output }) {
+          if (output === undefined) {
+            // No state, for example after a replacement: the engine did not
+            // read this name in plan. Overwriting a default that exists loses
+            // its value, so that needs adoption.
+            const existing = yield* readDefault(
+              api,
+              news.projectId,
+              news.name,
+              news.deploymentType,
+            );
+            if (existing !== undefined && !(yield* shouldAdopt(fqn))) {
+              return yield* new OwnedBySomeoneElse({
+                message: `Project ${news.projectId} already has a ${news.deploymentType} default environment variable ${news.name}. Re-run with --adopt to take it over and overwrite its value, or use a different name.`,
+                resourceType: DefaultEnvironmentVariable.Type,
+                physicalName: news.name,
+              });
+            }
+          }
           yield* updateDefault(api, news.projectId, news.name, news.deploymentType, news.value);
           return {
             projectId: news.projectId,
