@@ -1,5 +1,7 @@
 # Publishes the version in package.json to npm with provenance when a v* tag
 # is pushed. Uses npm trusted publishing (OIDC), so no npm token is stored.
+# A version that already exists on npm is skipped, so a tag can mark a
+# release that was published by hand.
 name: release
 
 on:
@@ -23,4 +25,15 @@ jobs:
           registry-url: https://registry.npmjs.org
       - run: pnpm install --frozen-lockfile
       - run: pnpm run check
-      - run: npm publish --access public --provenance
+      - id: version
+        run: |
+          name=$(node -p "require('./package.json').name")
+          version=$(node -p "require('./package.json').version")
+          if npm view "$name@$version" version >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "$name@$version is already on npm; skipping publish"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.version.outputs.exists == 'false'
+        run: npm publish --access public --provenance
