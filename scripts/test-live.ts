@@ -7,7 +7,12 @@ import { fileURLToPath } from "node:url";
 
 const vitePlus = fileURLToPath(import.meta.resolve("vite-plus/bin"));
 
-spawn(process.execPath, [vitePlus, "test", "--run", "test/live", ...process.argv.slice(2)], {
+// A file or name argument replaces the default filter, so that one live file
+// can run alone: `pnpm run test:live test/live/safety.live.test.ts`.
+const args = process.argv.slice(2);
+const filters = args.some((arg) => !arg.startsWith("-")) ? [] : ["test/live"];
+
+spawn(process.execPath, [vitePlus, "test", "--run", ...filters, ...args], {
   env: { ...process.env, ALCHEMY_CONVEX_LIVE: "1" },
   stdio: "inherit",
 }).on("close", (code) => {
