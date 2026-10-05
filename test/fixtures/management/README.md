@@ -15,6 +15,7 @@ files. Negative-case fixtures are derived by mutating these, never written from 
 | deployment_create_deploy_key.json | POST /deployments/{deployment_name}/create_deploy_key |
 | deployment_list_deploy_keys.json | GET /deployments/{deployment_name}/list_deploy_keys |
 | project_list_preview_deploy_keys.json | GET /projects/{project_id}/list_preview_deploy_keys |
+| project_list_default_environment_variables.json | GET /projects/{project_id}/list_default_environment_variables |
 | deployment_list_environment_variables.json | GET https://{deployment}.convex.cloud/api/v1/list_environment_variables |
 
 Facts learned while capturing: `delete_deploy_key` takes the key's unique name (as listed, with the

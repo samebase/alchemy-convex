@@ -7,6 +7,12 @@ export {
   fromToken,
 } from "./Credentials.ts";
 export {
+  DefaultEnvironmentVariable,
+  type DefaultEnvironmentVariableAttributes,
+  type DefaultEnvironmentVariableProps,
+  type DeploymentType,
+} from "./DefaultEnvironmentVariable.ts";
+export {
   Deploy,
   type DeployAttributes,
   deployArgs,

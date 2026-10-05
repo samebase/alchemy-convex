@@ -4,6 +4,10 @@ import { CommandExecutorLive } from "alchemy/Command";
 import * as Provider from "alchemy/Provider";
 import * as Layer from "effect/Layer";
 import { type Credentials, fromConfig } from "./Credentials.ts";
+import {
+  DefaultEnvironmentVariable,
+  DefaultEnvironmentVariableProvider,
+} from "./DefaultEnvironmentVariable.ts";
 import { Deploy, DeployProvider } from "./Deploy.ts";
 import { DeployKey, DeployKeyProvider } from "./DeployKey.ts";
 import { EnvironmentVariable, EnvironmentVariableProvider } from "./EnvironmentVariable.ts";
@@ -20,7 +24,14 @@ export class Providers extends Provider.ProviderCollection<Providers>()("Convex"
 export const providers = (credentials: Layer.Layer<Credentials> = fromConfig()) =>
   Layer.effect(
     Providers,
-    Provider.collection([Project, DeployKey, PreviewDeployKey, EnvironmentVariable, Deploy]),
+    Provider.collection([
+      Project,
+      DeployKey,
+      PreviewDeployKey,
+      EnvironmentVariable,
+      DefaultEnvironmentVariable,
+      Deploy,
+    ]),
   ).pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -28,6 +39,7 @@ export const providers = (credentials: Layer.Layer<Credentials> = fromConfig()) 
         DeployKeyProvider(),
         PreviewDeployKeyProvider(),
         EnvironmentVariableProvider(),
+        DefaultEnvironmentVariableProvider(),
         DeployProvider(),
       ),
     ),

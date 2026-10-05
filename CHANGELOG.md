@@ -9,6 +9,8 @@ First release, pinned to `alchemy@2.0.0-beta.80` and Effect 4.
   on change, delete by name.
 - `Convex.EnvironmentVariable`: set and remove one variable on one deployment through the
   deployment API.
+- `Convex.DefaultEnvironmentVariable`: project defaults that new deployments of a type inherit,
+  such as auth keys for every preview deployment.
 - `Convex.Deploy`: run `npx convex deploy` with a deploy key and expose the deployment URL,
   memoized by content hash.
 - Credentials from `CONVEX_ACCESS_TOKEN`, then the Convex CLI login.
