@@ -146,51 +146,69 @@ describe("Convex.DefaultEnvironmentVariable through the engine", () => {
     }),
   );
 
-  test.provider(
-    "keeps a default that a rename could not remove, and removes it on the next deploy",
-    (stack) =>
-      Effect.gen(function* () {
-        const fake = new FakeConvex().install();
-        const preview = (name: string) =>
-          Convex.DefaultEnvironmentVariable("Default", {
-            projectId: PROJECT_ID,
-            name,
-            deploymentType: "preview",
-            value: "new value",
-          }).pipe(Effect.as({}));
-        yield* stack.deploy(preview(PREVIEW_ONLY));
-        fake.scripted.set(
-          UPDATE,
-          Array.from({ length: 5 }, () => ({
-            status: 500,
-            body: fixture("project_delete_preview_deploy_key_500.json"),
-            when: (body: Record<string, unknown> | undefined) =>
-              JSON.stringify(body?.["changes"]).includes('"value":null'),
-          })),
-        );
-        yield* stack.deploy(preview(SHARED));
-        expect(fake.defaults.map((row) => row.name).sort()).toEqual([PREVIEW_ONLY, SHARED]);
-        yield* stack.deploy(preview(SHARED));
-        expect(fake.defaults.map((row) => row.name)).toEqual([SHARED]);
-      }),
-  );
+  const preview = (name: string, value = "new value") =>
+    Convex.DefaultEnvironmentVariable("Default", {
+      projectId: PROJECT_ID,
+      name,
+      deploymentType: "preview",
+      value,
+    }).pipe(Effect.as({}));
 
-  test.provider("keeps the default when a refused rename is reverted", (stack) =>
+  test.provider("updates the value in place", (stack) =>
     Effect.gen(function* () {
       const fake = new FakeConvex().install();
-      fake.defaults.push({ projectId: PROJECT_ID, name: SHARED, deploymentType: "preview" });
-      const preview = (name: string) =>
-        Convex.DefaultEnvironmentVariable("Default", {
-          projectId: PROJECT_ID,
-          name,
-          deploymentType: "preview",
-          value: "new value",
-        }).pipe(Effect.as({}));
       yield* stack.deploy(preview(PREVIEW_ONLY));
+      const from = fake.sent.length;
+      yield* stack.deploy(preview(PREVIEW_ONLY, "second value"));
+      expect(
+        fake.sent
+          .slice(from)
+          .filter((request) => `${request.method} ${request.path}` === UPDATE)
+          .map((request) => request.body),
+      ).toEqual([
+        { changes: [{ name: PREVIEW_ONLY, deploymentType: "preview", value: "second value" }] },
+      ]);
+    }),
+  );
+
+  test.provider("fails a rename with VariableIdentityChange before any write", (stack) =>
+    Effect.gen(function* () {
+      const fake = new FakeConvex().install();
+      yield* stack.deploy(preview(PREVIEW_ONLY));
+      const from = fake.sent.length;
       const refused = yield* Effect.flip(stack.deploy(preview(SHARED)));
-      expect(refused).toMatchObject({ _tag: "OwnedBySomeoneElse" });
+      expect(refused).toMatchObject({
+        _tag: "VariableIdentityChange",
+        field: "name",
+        current: PREVIEW_ONLY,
+        requested: SHARED,
+      });
+      expect(fake.lines(from)).toEqual([]);
+    }),
+  );
+
+  test.provider("fails a deploymentType change with VariableIdentityChange", (stack) =>
+    Effect.gen(function* () {
+      const fake = new FakeConvex().install();
       yield* stack.deploy(preview(PREVIEW_ONLY));
-      expect(fake.defaults.map((row) => row.name).sort()).toEqual([PREVIEW_ONLY, SHARED]);
+      const from = fake.sent.length;
+      const refused = yield* Effect.flip(
+        stack.deploy(
+          Convex.DefaultEnvironmentVariable("Default", {
+            projectId: PROJECT_ID,
+            name: PREVIEW_ONLY,
+            deploymentType: "dev",
+            value: "new value",
+          }).pipe(Effect.as({})),
+        ),
+      );
+      expect(refused).toMatchObject({
+        _tag: "VariableIdentityChange",
+        field: "deploymentType",
+        current: "preview",
+        requested: "dev",
+      });
+      expect(fake.lines(from)).toEqual([]);
     }),
   );
 

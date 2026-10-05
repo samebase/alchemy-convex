@@ -10,18 +10,18 @@
 // old value is lost when this resource writes it. Alchemy takes it over only
 // with --adopt.
 //
-// A new `name` or `deployment` is an update, not a replacement: reconcile
-// writes the new variable first and then removes the one that state names.
-// A replacement would let the engine delete an old generation that has the
-// same name as the live one, for example after a refused rename is reverted.
-// When that removal fails, the attributes keep the old variable in
-// `staleVariables`, and the next deploy and the delete remove it.
+// The variable's name and deployment cannot change. A change fails with
+// VariableIdentityChange: use a new resource with a new logical id. A
+// replacement could let the engine delete an old generation that names the
+// live variable, and a rename in place needs a cleanup that can fail and
+// leave a variable or a revoked key behind.
 //
 // The attributes keep the deploy key of the variable's deployment. After a
-// refused move, the props name the other deployment and its key, so read and
-// delete use the attributes, not the props.
+// refused change, the props can name another deployment and its key, so
+// read and delete use the attributes, not the props.
 import { createDeploymentClient } from "@convex-dev/platform";
 import { Resource } from "alchemy";
+import { isResolved } from "alchemy/Diff";
 import { OwnedBySomeoneElse, Unowned } from "alchemy/AdoptPolicy";
 import * as Provider from "alchemy/Provider";
 import * as Effect from "effect/Effect";
@@ -116,21 +116,11 @@ export interface EnvironmentVariableProps {
   readonly value: string | Redacted.Redacted<string>;
 }
 
-/** A variable of an earlier name or deployment that a rename or a move did not remove yet. */
-export interface StaleVariable {
-  readonly deployment: string;
-  readonly name: string;
-  /** Deploy key for `deployment`. */
-  readonly deployKey: Redacted.Redacted<string>;
-}
-
 export interface EnvironmentVariableAttributes {
   readonly deployment: string;
   readonly name: string;
   /** Deploy key for `deployment`, for read and delete. Undefined in state from 0.1.x. */
   readonly deployKey: Redacted.Redacted<string> | undefined;
-  /** Variables that a rename or a move did not remove yet. The next deploy and the delete remove them. */
-  readonly staleVariables: ReadonlyArray<StaleVariable> | undefined;
 }
 
 export type EnvironmentVariable = Resource<
@@ -143,6 +133,46 @@ export type EnvironmentVariable = Resource<
 export const EnvironmentVariable = Resource<EnvironmentVariable>("Convex.EnvironmentVariable");
 
 /**
+ * The props name another variable than the one in state. Used by
+ * Convex.EnvironmentVariable and Convex.DefaultEnvironmentVariable.
+ */
+export class VariableIdentityChange extends Schema.TaggedError<VariableIdentityChange>()(
+  "VariableIdentityChange",
+  {
+    resourceType: Schema.String,
+    field: Schema.Literals(["name", "deployment", "projectId", "deploymentType"]),
+    current: Schema.String,
+    requested: Schema.String,
+  },
+) {
+  override get message() {
+    return `${this.resourceType} cannot change its ${this.field} from ${this.current} to ${this.requested}. Create a new resource with a new logical id for the new name or deployment, and remove this one.`;
+  }
+}
+
+/** Fails with {@link VariableIdentityChange} when the props name another variable than the one in state. */
+const checkIdentity = (output: EnvironmentVariableAttributes, news: EnvironmentVariableProps) =>
+  output.name !== news.name
+    ? Effect.fail(
+        new VariableIdentityChange({
+          resourceType: EnvironmentVariable.Type,
+          field: "name",
+          current: output.name,
+          requested: news.name,
+        }),
+      )
+    : output.deployment !== news.deployment
+      ? Effect.fail(
+          new VariableIdentityChange({
+            resourceType: EnvironmentVariable.Type,
+            field: "deployment",
+            current: output.deployment,
+            requested: news.deployment,
+          }),
+        )
+      : Effect.void;
+
+/**
  * The deploy key for the variable in state: from the attributes, or, for
  * state from 0.1.x, from props that name the same deployment.
  */
@@ -152,19 +182,6 @@ const keyOf = (
 ): Redacted.Redacted<string> | undefined =>
   output.deployKey ?? (olds?.deployment === output.deployment ? olds.deployKey : undefined);
 
-/** Removes the variables and returns the ones that are still there, each with a warning. */
-const removeStale = (stale: ReadonlyArray<StaleVariable>) =>
-  Effect.forEach(stale, (old) =>
-    absentAsUndefined(updateVariable(old.deployment, old.deployKey, old.name, null)).pipe(
-      Effect.as<ReadonlyArray<StaleVariable>>([]),
-      Effect.catchTag("ConvexApiError", (error) =>
-        Effect.logWarning(
-          `Environment variable ${old.name} on deployment ${old.deployment} is not removed yet: ${error.message}. The next deploy tries again.`,
-        ).pipe(Effect.as([old])),
-      ),
-    ),
-  ).pipe(Effect.map((left) => left.flat()));
-
 export const EnvironmentVariableProvider = () =>
   Provider.effect(
     EnvironmentVariable,
@@ -172,16 +189,15 @@ export const EnvironmentVariableProvider = () =>
       const api = yield* ManagementApi;
 
       return {
-        // A variable that a rename did not remove yet needs an update, which
-        // removes it. Otherwise the engine updates when any prop changed and
-        // compares Redacted values, such as the value and the deploy key, by
-        // content.
-        diff: ({ output }) =>
-          Effect.succeed(
-            output?.staleVariables !== undefined && output.staleVariables.length > 0
-              ? ({ action: "update" } as const)
-              : undefined,
-          ),
+        // Compares with the attributes: after a refused change, `olds` are
+        // the refused props. Otherwise undefined: the engine updates when any
+        // prop changed and compares Redacted values, such as the value and
+        // the deploy key, by content.
+        diff: Effect.fn(function* ({ news, output }) {
+          if (!isResolved(news) || output === undefined) return undefined;
+          yield* checkIdentity(output, news);
+          return undefined;
+        }),
 
         read: Effect.fn(function* ({ olds, output }) {
           if (output !== undefined) {
@@ -193,29 +209,21 @@ export const EnvironmentVariableProvider = () =>
           }
           const found = yield* readVariable(api, olds.deployment, olds.deployKey, olds.name);
           // No state: the variable belongs to someone else until the user passes --adopt.
-          return found === undefined
-            ? undefined
-            : Unowned({ ...found, deployKey: olds.deployKey, staleVariables: undefined });
+          return found === undefined ? undefined : Unowned({ ...found, deployKey: olds.deployKey });
         }),
 
-        reconcile: Effect.fn(function* ({ fqn, olds, news, output }) {
-          const sameAs = (variable: { readonly deployment: string; readonly name: string }) =>
-            variable.deployment === news.deployment && variable.name === news.name;
-          // A rename back to a name that a failed cleanup left is still ours.
-          const stale = (output?.staleVariables ?? []).filter((old) => !sameAs(old));
-          const owned =
-            (output !== undefined && sameAs(output)) ||
-            stale.length !== (output?.staleVariables?.length ?? 0);
+        reconcile: Effect.fn(function* ({ fqn, news, output }) {
+          // Also here: with an unresolved prop in plan, diff could not check.
+          if (output !== undefined) yield* checkIdentity(output, news);
           const write = writeVariable(news.deployment, news.deployKey, news.name, news.value);
-          if (owned || (yield* shouldAdopt(fqn))) {
+          if (output !== undefined || (yield* shouldAdopt(fqn))) {
             // In state, or adopted: the variable is ours to set.
             yield* retryIdempotentWrite(write);
           } else {
-            // Not in state: a new resource, or a new name or deployment.
-            // Overwriting a variable that exists loses its value, so that
-            // needs adoption. Each attempt checks first, so a retry after a
-            // write conflict never overwrites a variable that another writer
-            // created in the meantime.
+            // Not in state: overwriting a variable that exists loses its
+            // value, so that needs adoption. Each attempt checks first, so a
+            // retry after a write conflict never overwrites a variable that
+            // another writer created in the meantime.
             yield* retryIdempotentWrite(
               Effect.gen(function* () {
                 const existing = yield* readVariable(
@@ -235,24 +243,7 @@ export const EnvironmentVariableProvider = () =>
               }),
             );
           }
-          if (output !== undefined && !sameAs(output)) {
-            // A rename or a move: the variable that state names is now stale.
-            const key = keyOf(output, olds);
-            if (key === undefined) {
-              yield* Effect.logWarning(
-                `Environment variable ${output.name} on deployment ${output.deployment} stays: Alchemy has no deploy key for that deployment. Remove it in the Convex dashboard.`,
-              );
-            } else {
-              stale.push({ deployment: output.deployment, name: output.name, deployKey: key });
-            }
-          }
-          const left = yield* removeStale(stale);
-          return {
-            deployment: news.deployment,
-            name: news.name,
-            deployKey: news.deployKey,
-            staleVariables: left.length === 0 ? undefined : left,
-          };
+          return { deployment: news.deployment, name: news.name, deployKey: news.deployKey };
         }),
 
         delete: Effect.fn(function* ({ olds, output }) {
@@ -261,19 +252,10 @@ export const EnvironmentVariableProvider = () =>
             yield* Effect.logWarning(
               `Environment variable ${output.name} on deployment ${output.deployment} stays: Alchemy has no deploy key for that deployment. Remove it in the Convex dashboard.`,
             );
+            return;
           }
-          const all = [
-            ...(key === undefined
-              ? []
-              : [{ deployment: output.deployment, name: output.name, deployKey: key }]),
-            ...(output.staleVariables ?? []),
-          ];
           // Removing an absent variable succeeds; 404 means the deployment is gone.
-          yield* Effect.forEach(all, (variable) =>
-            absentAsUndefined(
-              updateVariable(variable.deployment, variable.deployKey, variable.name, null),
-            ),
-          );
+          yield* absentAsUndefined(updateVariable(output.deployment, key, output.name, null));
         }),
       };
     }),

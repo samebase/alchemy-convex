@@ -1,11 +1,11 @@
 // Convex.Project through the real Alchemy engine, against FakeConvex. Each
 // test gets a fresh in-memory state.
 import { adopt } from "alchemy/AdoptPolicy";
+import * as Output from "alchemy/Output";
 import * as RemovalPolicy from "alchemy/RemovalPolicy";
 import * as Test from "alchemy/Test/Vitest";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
-import * as Schema from "effect/Schema";
 import { describe, expect } from "vitest";
 import * as Convex from "../src/index.ts";
 import { FakeConvex, recorded } from "./fakeConvex.ts";
@@ -107,36 +107,26 @@ describe("Convex.Project", () => {
   test.provider("accepts the original deploymentType again after a refused change", (stack) =>
     Effect.gen(function* () {
       const fake = new FakeConvex().install();
-      const deployKey = Redacted.make(
-        Schema.decodeUnknownSync(Schema.Struct({ deployKey: Schema.String }))(
-          recorded("deployment_create_deploy_key.json"),
-        ).deployKey,
-      );
-      // The name comes from another resource. When that resource changes in
-      // the same deploy, the name is unresolved in plan, so the refusal comes
-      // from reconcile, after the engine saved the refused props as state.
+      // The name comes from another project. When this deploy renames that
+      // project, the name is unresolved in plan, so the refusal comes from
+      // reconcile, after the engine saved the refused props as state.
       const withName = (name: string, deploymentType: "prod" | "dev") =>
         Effect.gen(function* () {
-          const source = yield* Convex.EnvironmentVariable("NameSource", {
-            deployment: "beaming-okapi-932",
-            deployKey,
-            name,
-            value: "name source",
-          });
+          const source = yield* Convex.Project("NameSource", { team: TEAM, name });
           const created = yield* Convex.Project("Project", {
             team: TEAM,
-            name: source.name,
+            name: Output.map(source.name, (sourceName) => `${sourceName}-main`),
             deploymentType,
           });
           return { projectId: created.projectId };
         });
-      const first = yield* stack.deploy(withName("TMP_ALCHEMY_CONVEX_A", "prod"));
-      const refused = yield* Effect.flip(stack.deploy(withName("TMP_ALCHEMY_CONVEX_B", "dev")));
+      const first = yield* stack.deploy(withName(`${NAME}-a`, "prod"));
+      const refused = yield* Effect.flip(stack.deploy(withName(`${NAME}-b`, "dev")));
       expect(refused).toMatchObject({ _tag: "ProjectDeploymentChange", current: "prod" });
       // The fix that the error names: set the type back.
-      const restored = yield* stack.deploy(withName("TMP_ALCHEMY_CONVEX_B", "prod"));
+      const restored = yield* stack.deploy(withName(`${NAME}-b`, "prod"));
       expect(restored.projectId).toBe(first.projectId);
-      expect(fake.project(first.projectId)?.name).toBe("TMP_ALCHEMY_CONVEX_B");
+      expect(fake.project(first.projectId)?.name).toBe(`${NAME}-b-main`);
     }),
   );
 

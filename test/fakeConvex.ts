@@ -85,8 +85,6 @@ export class FakeConvex {
     {
       status: number;
       body: unknown;
-      /** Answers only a request whose body matches. Other requests pass by. */
-      when?: (body: Record<string, unknown> | undefined) => boolean;
       meanwhile?: () => void;
     }[]
   >();
@@ -143,9 +141,7 @@ export class FakeConvex {
     const body = Schema.decodeUnknownSync(RequestBody)(text === "" ? undefined : JSON.parse(text));
     const path = `${url.host}${url.pathname}`;
     this.sent.push({ method: request.method, path, query: url.searchParams, body });
-    const queue = this.scripted.get(`${request.method} ${path}`) ?? [];
-    const index = queue.findIndex((entry) => entry.when === undefined || entry.when(body));
-    const [next] = index === -1 ? [] : queue.splice(index, 1);
+    const next = this.scripted.get(`${request.method} ${path}`)?.shift();
     if (next !== undefined) {
       // A change that another writer makes while this request runs.
       next.meanwhile?.();

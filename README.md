@@ -126,6 +126,10 @@ replace, or overwrite your data by accident:
   login.
 - An `EnvironmentVariable` or a `DefaultEnvironmentVariable` that exists but is not in state
   belongs to someone else. The provider overwrites it only with `--adopt`.
+- A variable keeps its name and deployment (a default keeps its project, name, and deployment
+  type). A change stops the deploy with `VariableIdentityChange`. To rename or move a variable,
+  create a new resource with a new logical id and remove the old one. A rename in place would
+  need a cleanup step that can fail and leave a variable or a revoked deploy key behind.
 - A variable write runs again after a Convex write conflict or a 5xx answer, at most four more
   times. The write sets a value, so a second write has the same result.
 
@@ -151,15 +155,15 @@ the Convex dashboard.
   Outputs `uniqueName`, `keyId`, and `previewDeployKey`.
 - `Convex.EnvironmentVariable`: `{ deployment, deployKey, name, value }`. One variable on one
   deployment, set through the deployment API with that deployment's key. An existing variable with
-  the same name is adopted and overwritten only with `--adopt`. A new `name` or `deployment` is an
-  update: the provider writes the new variable, then removes the old one. When that removal fails,
-  the old variable stays in the `staleVariables` output, and the next deploy or the delete removes
-  it. Read and delete use the deploy key in the outputs, not the props.
+  the same name is adopted and overwritten only with `--adopt`. A new `value` or `deployKey` is an
+  update in place. A new `name` or `deployment` stops the deploy with `VariableIdentityChange`:
+  use a new logical id. Outputs `deployment`, `name`, and `deployKey`. Read and delete use the
+  deploy key in the outputs, not the props.
 - `Convex.DefaultEnvironmentVariable`: `{ projectId, name, value, deploymentType }`. A project
   default that new deployments of that type inherit. Use it for preview and dev deployments. An
   existing default with the same name and type is adopted and overwritten only with `--adopt`. A
-  new `projectId`, `name`, or `deploymentType` is an update: the provider writes the new default,
-  then removes the old one, and retries a failed removal on the next deploy (`staleDefaults`).
+  new `value` is an update in place. A new `projectId`, `name`, or `deploymentType` stops the
+  deploy with `VariableIdentityChange`: use a new logical id.
 - `Convex.Deploy`: `{ cwd?, env?, deployKey, previewName?, previewCreate?, previewRun?, extraArgs?,
 memo?, timeout? }`. Runs `npx convex deploy` with `CONVEX_DEPLOY_KEY` set and parses the
   deployment URL from the CLI output. Outputs `url`, `deploymentName`, `hash`. Memoized by content

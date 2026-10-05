@@ -10,7 +10,6 @@ export {
   DefaultEnvironmentVariable,
   type DefaultEnvironmentVariableAttributes,
   type DefaultEnvironmentVariableProps,
-  type DefaultIdentity,
   type DeploymentType,
 } from "./DefaultEnvironmentVariable.ts";
 export {
@@ -34,7 +33,7 @@ export {
   EnvironmentVariable,
   type EnvironmentVariableAttributes,
   type EnvironmentVariableProps,
-  type StaleVariable,
+  VariableIdentityChange,
 } from "./EnvironmentVariable.ts";
 export { ConvexApiError, ManagementApi } from "./ManagementApi.ts";
 export {
