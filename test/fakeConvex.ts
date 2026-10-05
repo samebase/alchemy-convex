@@ -85,6 +85,11 @@ export class FakeConvex {
   pageSize = 100;
   /** Rows that GET /teams/{team_id}/projects leaves out while this is above zero, one call at a time. */
   hideProjectsFromListings = 0;
+  /**
+   * Answers key creates as Convex does for an OAuth credential: no new key,
+   * and the returned secret carries the bearer token after "|".
+   */
+  oauth = false;
   private nextId = 9_100_000;
 
   /** Stubs the global fetch. The Convex clients read it when they are created. */
@@ -129,10 +134,16 @@ export class FakeConvex {
     this.sent.push({ method: request.method, path, query: url.searchParams, body });
     const next = this.scripted.get(`${request.method} ${path}`)?.shift();
     if (next !== undefined) return json(next.status, next.body);
-    return this.route(request.method, url, body);
+    const bearer = (request.headers.get("Authorization") ?? "").replace(/^Bearer /, "");
+    return this.route(request.method, url, body, bearer);
   };
 
-  private route(method: string, url: URL, body: Record<string, unknown> | undefined): Response {
+  private route(
+    method: string,
+    url: URL,
+    body: Record<string, unknown> | undefined,
+    bearer: string,
+  ): Response {
     const deploymentHost = /^([a-z0-9-]+)\.convex\.cloud$/.exec(url.host);
     if (deploymentHost !== null)
       return this.deploymentApi(deploymentHost[1] ?? "", method, url, body);
@@ -195,6 +206,15 @@ export class FakeConvex {
     switch (`${method} ${keyRoute}`) {
       case "POST create_deploy_key":
       case "POST create_preview_deploy_key": {
+        if (this.oauth) {
+          const secret = `${recordedSecret.slice(0, recordedSecret.indexOf("|"))}|${bearer}`;
+          return json(
+            200,
+            keyRoute === "create_deploy_key"
+              ? { ...recorded("deployment_create_deploy_key.json"), deployKey: secret }
+              : { previewDeployKey: secret },
+          );
+        }
         const name = String(body?.["name"]);
         const key = {
           id: this.nextId++,

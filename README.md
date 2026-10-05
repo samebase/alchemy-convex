@@ -119,7 +119,11 @@ replace, or overwrite your data by accident:
   `name` prop, a dash, and a hash of the resource identity. The provider deletes a key only by its
   secret, so it cannot revoke the key of another resource. When the key list does not show
   exactly one key with the requested name, the deploy stops with `DeployKeyRecoveryRequired`,
-  which lists the key ids.
+  which lists the key ids. The provider never revokes a key on a failed create.
+- With an OAuth token as the credential, Convex creates no new key: it returns the OAuth token
+  with a new prefix. The key resources then stop with `DeployKeyIsCredential` and do not keep that
+  value, because a delete would revoke the OAuth token. Use a team access token or the Convex CLI
+  login.
 - An `EnvironmentVariable` or a `DefaultEnvironmentVariable` that exists but is not in state
   belongs to someone else. The provider overwrites it only with `--adopt`.
 - A variable write runs again after a Convex write conflict or a 5xx answer, at most four more

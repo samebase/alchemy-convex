@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   CreatedDeployKey,
   createTrackedKey,
+  DeployKeyIsCredential,
   DeployKeyList,
   DeployKeyRecoveryRequired,
   isKeyListed,
@@ -158,8 +159,11 @@ describe("createTrackedKey", () => {
   const second = { id: recorded.id + 1, name: `${name} (870993b4-ffe6-4911-adbd-e29f7fd712f2)` };
 
   /** Runs createTrackedKey with one listing for each list call. */
-  const track = (listings: ReadonlyArray<ReadonlyArray<typeof ListedKey.Type>>) => {
-    const calls = { list: 0, create: 0, revoked: new Array<string>() };
+  const track = (
+    listings: ReadonlyArray<ReadonlyArray<typeof ListedKey.Type>>,
+    credential = false,
+  ) => {
+    const calls = { list: 0, create: 0 };
     const effect = createTrackedKey({
       target: "deployment beaming-okapi-932",
       name,
@@ -168,10 +172,7 @@ describe("createTrackedKey", () => {
         calls.create += 1;
         return secret;
       }),
-      revoke: (revoked) =>
-        Effect.sync(() => {
-          calls.revoked.push(revoked);
-        }),
+      isCredentialToken: () => Effect.succeed(credential),
     });
     return { effect, calls };
   };
@@ -184,30 +185,37 @@ describe("createTrackedKey", () => {
       uniqueName: recorded.name,
       secret,
     });
-    expect(calls).toEqual({ list: 2, create: 1, revoked: [] });
+    expect(calls).toEqual({ list: 2, create: 1 });
   });
 
   it("fails before the create when a key with the name already exists", async () => {
     const { effect, calls } = track([[recorded]]);
     const error = await Effect.runPromise(Effect.flip(effect));
     expect(error).toBeInstanceOf(DeployKeyRecoveryRequired);
-    expect(error).toMatchObject({ name, keys: [recorded], revokedNewKey: false });
+    expect(error).toMatchObject({ name, keys: [recorded], afterCreate: false });
     expect(error.message).toContain(`"${recorded.name}" (id ${recorded.id})`);
-    expect(calls).toEqual({ list: 1, create: 0, revoked: [] });
+    expect(calls).toEqual({ list: 1, create: 0 });
   });
 
-  it("revokes the new key by its secret when two listed keys have the name", async () => {
-    const { effect, calls } = track([[], [recorded, second]]);
+  it("fails and lists the candidates when two listed keys have the name", async () => {
+    const { effect } = track([[], [recorded, second]]);
     const error = await Effect.runPromise(Effect.flip(effect));
-    expect(error).toMatchObject({ keys: [recorded, second], revokedNewKey: true });
-    expect(calls.revoked).toEqual([secret]);
+    expect(error).toMatchObject({ keys: [recorded, second], afterCreate: true });
+    expect(error.message).toContain(`(id ${second.id})`);
   });
 
-  it("revokes the new key by its secret when the listing does not show it", async () => {
-    const { effect, calls } = track([[], []]);
+  it("fails when the listing does not show the new key", async () => {
+    const { effect } = track([[], []]);
     const error = await Effect.runPromise(Effect.flip(effect));
-    expect(error).toMatchObject({ keys: [], revokedNewKey: true });
-    expect(calls.revoked).toEqual([secret]);
+    expect(error).toMatchObject({ keys: [], afterCreate: true });
+  });
+
+  it("fails without keeping a secret that is the Management API credential", async () => {
+    const { effect, calls } = track([[], [recorded]], true);
+    const error = await Effect.runPromise(Effect.flip(effect));
+    expect(error).toBeInstanceOf(DeployKeyIsCredential);
+    expect(error.message).toContain("OAuth");
+    expect(calls).toEqual({ list: 1, create: 1 });
   });
 });
 
@@ -252,6 +260,24 @@ describe("Convex.DeployKey through the engine", () => {
         { id: Redacted.value(both.aKey) },
       ]);
       expect(fake.keys.get(deployment)?.map((key) => key.name)).toEqual([both.b]);
+    }),
+  );
+
+  test.provider("never keeps or deletes the OAuth token that Convex returns as a key", (stack) =>
+    Effect.gen(function* () {
+      const fake = new FakeConvex().install();
+      fake.oauth = true;
+      const error = yield* Effect.flip(
+        stack.deploy(
+          Effect.gen(function* () {
+            const key = yield* Convex.DeployKey("Key", { deployment, name: "ci" });
+            return { name: key.uniqueName };
+          }),
+        ),
+      );
+      expect(error).toMatchObject({ _tag: "DeployKeyIsCredential" });
+      yield* stack.destroy();
+      expect(fake.lines().filter((line) => line.endsWith("/delete_deploy_key"))).toEqual([]);
     }),
   );
 

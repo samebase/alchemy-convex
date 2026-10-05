@@ -71,7 +71,18 @@ export interface ManagementApiService {
   ) => Effect.Effect<T, ConvexApiError>;
   /** Team id for a slug or numeric id. */
   readonly resolveTeamId: (team: string | number) => Effect.Effect<number, ConvexApiError>;
+  /**
+   * True when a deploy key that Convex returned carries the token of the
+   * Management API credential itself. With an OAuth token, create_deploy_key
+   * and create_preview_deploy_key create no new key: they return the OAuth
+   * token with a new prefix, and the part after "|" is the same. A delete of
+   * that key would revoke the credential.
+   */
+  readonly isCredentialToken: (secret: string) => Effect.Effect<boolean>;
 }
+
+/** The part of a Convex token after the first "|", or the whole value when it has none. */
+const tokenPart = (value: string) => value.slice(value.indexOf("|") + 1);
 
 export class ManagementApi extends Context.Service<ManagementApi, ManagementApiService>()(
   "@samebase/alchemy-convex/ManagementApi",
@@ -226,6 +237,13 @@ export const ManagementApiLive = (): Layer.Layer<ManagementApi, never, Credentia
           return match.id;
         });
 
-      return { request, requestVoid, deploymentRequest, resolveTeamId };
+      const isCredentialToken: ManagementApiService["isCredentialToken"] = (secret) =>
+        credentials.pipe(
+          Effect.map(
+            (resolved) => tokenPart(Redacted.value(resolved.accessToken)) === tokenPart(secret),
+          ),
+        );
+
+      return { request, requestVoid, deploymentRequest, resolveTeamId, isCredentialToken };
     }),
   );

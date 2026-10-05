@@ -4,15 +4,22 @@
 // Convex returns the secret only once, from create_preview_deploy_key. The
 // identity rules are the same as for Convex.DeployKey: a requested name that
 // is unique for each resource instance, exactly one listed key after the
-// create with its numeric id in state, and delete by the secret only. A key
-// cannot change after creation, so every property change is a replacement.
+// create with its numeric id in state, delete by the secret only, and never
+// keep a key that is the OAuth credential itself. A key cannot change after
+// creation, so every property change is a replacement.
 import { Resource } from "alchemy";
 import { havePropsChanged, isResolved } from "alchemy/Diff";
 import * as Provider from "alchemy/Provider";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import { createTrackedKey, isKeyListed, ListedKey, requestedKeyName } from "./DeployKey.ts";
+import {
+  createTrackedKey,
+  isKeyListed,
+  ListedKey,
+  requestedKeyName,
+  secretToDelete,
+} from "./DeployKey.ts";
 import { absentAsUndefined, ManagementApi, retryIdempotentWrite } from "./ManagementApi.ts";
 import type { Providers } from "./Providers.ts";
 
@@ -125,24 +132,22 @@ export const PreviewDeployKeyProvider = () =>
                     Schema.decodeUnknownSync(CreatedPreviewDeployKey)(body).previewDeployKey,
                 ),
               ),
-            revoke: (secret) => deleteKey(news.projectId, secret),
+            isCredentialToken: api.isCredentialToken,
           });
           return { uniqueName, keyId, projectId: news.projectId, previewDeployKey: secret };
         }),
 
         delete: Effect.fn(function* ({ output }) {
-          // Without the secret, no call can name this key alone: 0.1.x state
-          // can hold the listed name of another resource's key.
-          if (!Redacted.isRedacted(output.previewDeployKey)) {
-            yield* Effect.logWarning(
-              `Convex.PreviewDeployKey "${output.uniqueName}" in project ${output.projectId} has no secret in state, so Alchemy does not delete it. Delete it in the Convex dashboard.`,
-            );
-            return;
-          }
-          // 404 PreviewDeployKeyNotFound: an earlier attempt or someone else deleted it.
-          yield* absentAsUndefined(
-            deleteKey(output.projectId, Redacted.value(output.previewDeployKey)),
+          // Only the secret names this key alone: 0.1.x state can hold the
+          // listed name of another resource's key.
+          const secret = yield* secretToDelete(
+            api,
+            output.previewDeployKey,
+            `Convex.PreviewDeployKey "${output.uniqueName}" in project ${output.projectId}`,
           );
+          if (secret === undefined) return;
+          // 404 PreviewDeployKeyNotFound: an earlier attempt or someone else deleted it.
+          yield* absentAsUndefined(deleteKey(output.projectId, secret));
         }),
       };
     }),

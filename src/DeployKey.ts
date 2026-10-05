@@ -15,6 +15,9 @@
 //   keeps that key's numeric id.
 // - Delete sends the secret as `id`, so it can revoke only the key that this
 //   resource created. It never deletes by a listed name.
+// - With an OAuth token as the Management API credential, Convex returns
+//   that token as the "new" key. The provider never stores, revokes, or
+//   deletes such a key: the create fails with DeployKeyIsCredential.
 // A key cannot change after creation, so every property change is a replacement.
 import { createHash } from "node:crypto";
 import { Resource } from "alchemy";
@@ -28,6 +31,7 @@ import {
   absentAsUndefined,
   type ConvexApiError,
   ManagementApi,
+  type ManagementApiService,
   retryIdempotentWrite,
 } from "./ManagementApi.ts";
 import type { Providers } from "./Providers.ts";
@@ -104,8 +108,8 @@ export class DeployKeyRecoveryRequired extends Schema.TaggedError<DeployKeyRecov
     name: Schema.String,
     /** The listed keys with the requested name. */
     keys: Schema.Array(ListedKey),
-    /** True when this run created a key and then revoked it again by its secret. */
-    revokedNewKey: Schema.Boolean,
+    /** True when this run created a key before the listing check failed. */
+    afterCreate: Schema.Boolean,
   },
 ) {
   override get message() {
@@ -113,24 +117,39 @@ export class DeployKeyRecoveryRequired extends Schema.TaggedError<DeployKeyRecov
       this.keys.length === 0
         ? "no key"
         : this.keys.map((key) => `"${key.name}" (id ${key.id})`).join(", ");
-    return this.revokedNewKey
-      ? `Convex created deploy key "${this.name}" on ${this.target}, but the listing shows ${listed} with that name, not exactly one. The resource cannot track the new key, so Alchemy revoked it by its secret. Delete any leftover keys with that name in the Convex dashboard, then run the deploy again.`
+    return this.afterCreate
+      ? `Convex created deploy key "${this.name}" on ${this.target}, but the listing shows ${listed} with that name, not exactly one, so this resource cannot track the new key. Alchemy does not revoke it. Delete the keys with that name in the Convex dashboard, then run the deploy again.`
       : `${this.target} already lists ${listed} with the name "${this.name}", but Alchemy state has no such key. An interrupted run probably created it, and its secret is lost. Delete these keys in the Convex dashboard, then run the deploy again.`;
   }
 }
 
 /**
+ * Convex returned the Management API credential itself as the new key. This
+ * happens with an OAuth token: Convex creates no key. A delete of the
+ * returned secret would revoke the credential, so the resource does not keep it.
+ */
+export class DeployKeyIsCredential extends Schema.TaggedError<DeployKeyIsCredential>()(
+  "DeployKeyIsCredential",
+  { target: Schema.String, name: Schema.String },
+) {
+  override get message() {
+    return `Convex returned the Management API credential itself as deploy key "${this.name}" on ${this.target}. With an OAuth token, Convex creates no new key, and deleting the returned key would revoke the OAuth token. Alchemy does not keep it. Use a team access token in CONVEX_ACCESS_TOKEN, or the Convex CLI login.`;
+  }
+}
+
+/**
  * Creates a key named `name` and ties it to the caller. Fails before the
- * create when keys with that name already exist, and after the create when
- * the listing does not show exactly one key with that name. In the second
- * case it first revokes the new key by its secret.
+ * create when keys with that name already exist. After the create, fails
+ * when the secret is the Management API credential itself, or when the
+ * listing does not show exactly one key with that name. It never revokes a
+ * key: the returned secret can be a shared credential.
  */
 export const createTrackedKey = (options: {
   readonly target: string;
   readonly name: string;
   readonly list: Effect.Effect<ReadonlyArray<typeof ListedKey.Type>, ConvexApiError>;
   readonly create: Effect.Effect<string, ConvexApiError>;
-  readonly revoke: (secret: string) => Effect.Effect<void, ConvexApiError>;
+  readonly isCredentialToken: (secret: string) => Effect.Effect<boolean>;
 }) =>
   Effect.gen(function* () {
     const { target, name } = options;
@@ -140,22 +159,51 @@ export const createTrackedKey = (options: {
         target,
         name,
         keys: existing,
-        revokedNewKey: false,
+        afterCreate: false,
       });
     }
     const secret = yield* options.create;
+    if (yield* options.isCredentialToken(secret)) {
+      return yield* new DeployKeyIsCredential({ target, name });
+    }
     const listed = keysListedAs(yield* options.list, name);
     const [only] = listed;
     if (only === undefined || listed.length !== 1) {
-      yield* absentAsUndefined(options.revoke(secret));
       return yield* new DeployKeyRecoveryRequired({
         target,
         name,
         keys: listed,
-        revokedNewKey: true,
+        afterCreate: true,
       });
     }
     return { keyId: only.id, uniqueName: only.name, secret: Redacted.make(secret) };
+  });
+
+/**
+ * The secret to send to a delete call, or undefined when a delete is not
+ * safe: state has no secret, or the secret is the Management API credential
+ * (state written by 0.1.x under an OAuth token). Then the key stays, and a
+ * warning names it.
+ */
+export const secretToDelete = (
+  api: ManagementApiService,
+  secret: Redacted.Redacted<string> | undefined,
+  label: string,
+) =>
+  Effect.gen(function* () {
+    if (!Redacted.isRedacted(secret)) {
+      yield* Effect.logWarning(
+        `${label} has no secret in state, so Alchemy does not delete it. Delete it in the Convex dashboard.`,
+      );
+      return undefined;
+    }
+    if (yield* api.isCredentialToken(Redacted.value(secret))) {
+      yield* Effect.logWarning(
+        `${label} is the Management API credential itself, so Alchemy does not delete it: a delete would revoke the credential.`,
+      );
+      return undefined;
+    }
+    return Redacted.value(secret);
   });
 
 export interface DeployKeyProps {
@@ -264,22 +312,22 @@ export const DeployKeyProvider = () =>
               .pipe(
                 Effect.map((body) => Schema.decodeUnknownSync(CreatedDeployKey)(body).deployKey),
               ),
-            revoke: (secret) => deleteKey(news.deployment, secret),
+            isCredentialToken: api.isCredentialToken,
           });
           return { uniqueName, keyId, deployment: news.deployment, deployKey: secret };
         }),
 
         delete: Effect.fn(function* ({ output }) {
-          // Without the secret, no call can name this key alone: 0.1.x state
-          // can hold the listed name of another resource's key.
-          if (!Redacted.isRedacted(output.deployKey)) {
-            yield* Effect.logWarning(
-              `Convex.DeployKey "${output.uniqueName}" on ${output.deployment} has no secret in state, so Alchemy does not delete it. Delete it in the Convex dashboard.`,
-            );
-            return;
-          }
+          // Only the secret names this key alone: 0.1.x state can hold the
+          // listed name of another resource's key.
+          const secret = yield* secretToDelete(
+            api,
+            output.deployKey,
+            `Convex.DeployKey "${output.uniqueName}" on ${output.deployment}`,
+          );
+          if (secret === undefined) return;
           // 404 DeployKeyNotFound: an earlier attempt or someone else deleted it.
-          yield* absentAsUndefined(deleteKey(output.deployment, Redacted.value(output.deployKey)));
+          yield* absentAsUndefined(deleteKey(output.deployment, secret));
         }),
       };
     }),

@@ -25,6 +25,7 @@ export {
   DeployKey,
   type DeployKeyAction,
   type DeployKeyAttributes,
+  DeployKeyIsCredential,
   type DeployKeyProps,
   DeployKeyRecoveryRequired,
 } from "./DeployKey.ts";
