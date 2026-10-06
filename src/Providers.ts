@@ -10,6 +10,7 @@ import {
 } from "./DefaultEnvironmentVariable.ts";
 import { Deploy, DeployProvider } from "./Deploy.ts";
 import { DeployKey, DeployKeyProvider } from "./DeployKey.ts";
+import { Deployment, DeploymentProvider } from "./Deployment.ts";
 import { EnvironmentVariable, EnvironmentVariableProvider } from "./EnvironmentVariable.ts";
 import { ManagementApiLive } from "./ManagementApi.ts";
 import { PreviewDeployKey, PreviewDeployKeyProvider } from "./PreviewDeployKey.ts";
@@ -26,6 +27,7 @@ export const providers = (credentials: Layer.Layer<Credentials> = fromConfig()) 
     Providers,
     Provider.collection([
       Project,
+      Deployment,
       DeployKey,
       PreviewDeployKey,
       EnvironmentVariable,
@@ -36,6 +38,7 @@ export const providers = (credentials: Layer.Layer<Credentials> = fromConfig()) 
     Layer.provide(
       Layer.mergeAll(
         ProjectProvider(),
+        DeploymentProvider(),
         DeployKeyProvider(),
         PreviewDeployKeyProvider(),
         EnvironmentVariableProvider(),

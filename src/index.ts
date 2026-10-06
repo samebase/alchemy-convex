@@ -30,6 +30,14 @@ export {
   DeployKeyRecoveryRequired,
 } from "./DeployKey.ts";
 export {
+  AmbiguousDeployment,
+  Deployment,
+  type DeploymentAttributes,
+  DeploymentIdentityChange,
+  type DeploymentProps,
+  ProductionDeploymentNotFound,
+} from "./Deployment.ts";
+export {
   EnvironmentVariable,
   type EnvironmentVariableAttributes,
   type EnvironmentVariableProps,
