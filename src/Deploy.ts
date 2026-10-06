@@ -1,5 +1,7 @@
-// Convex.Deploy: pushes the functions in a `convex/` directory with
-// `npx convex deploy` and exposes the deployment URL for a frontend build.
+// Convex.Deploy (deprecated since 0.3.0, use Convex.Code): pushes the
+// functions in a `convex/` directory with `npx convex deploy` and exposes
+// the deployment URL for a frontend build. It stays so that stacks and state
+// from 0.1 and 0.2 keep working: Convex.Code has other props.
 //
 // The deployment itself belongs to the project, so delete leaves the last
 // pushed functions running. The URL comes from the CLI's own output because
@@ -13,6 +15,7 @@ import * as Provider from "alchemy/Provider";
 import * as Effect from "effect/Effect";
 import type * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
+import { parseDeployOutput } from "./Code.ts";
 import type { Providers } from "./Providers.ts";
 
 export interface DeployProps extends Pick<CommandRunProps, "cwd" | "env" | "timeout"> {
@@ -65,26 +68,13 @@ export interface DeployAttributes {
 }
 
 export type Deploy = Resource<"Convex.Deploy", DeployProps, DeployAttributes, never, Providers>;
-export const Deploy = Resource<Deploy>("Convex.Deploy");
-
 /**
- * The CLI prints this line with `logFinishedStep` after the push succeeds, to
- * stderr (convex 1.45 `cli/lib/deploy2.js` for existing deployments,
- * `cli/deploy.js` for preview deployments). The host is
- * `<deployment>.convex.cloud` or `<deployment>.<region>.convex.cloud`.
+ * @deprecated Since 0.3.0. Use Convex.Code with a Convex.Deployment: it
+ * runs the installed Convex CLI, keeps the deploy key out of the process
+ * environment, checks that the key fits the deployment, and outputs the site
+ * URL. Removing a Deploy resource changes nothing in Convex.
  */
-const DEPLOYED_LINE =
-  /Deployed Convex functions to (https:\/\/([a-z0-9]+(?:-[a-z0-9]+)*)(?:\.[a-z0-9]+(?:-[a-z0-9]+)*)?\.convex\.cloud)\/?(?=\s|$)/m;
-
-/** Reads the deployment URL from `convex deploy` output. ANSI escape codes are removed first. */
-export const parseDeployOutput = (
-  text: string,
-): { url: string; deploymentName: string } | undefined => {
-  const match = DEPLOYED_LINE.exec(stripVTControlCharacters(text));
-  const url = match?.[1];
-  const deploymentName = match?.[2];
-  return url === undefined || deploymentName === undefined ? undefined : { url, deploymentName };
-};
+export const Deploy = Resource<Deploy>("Convex.Deploy");
 
 /** The `convex deploy` argv, starting with `npx`. */
 export const deployArgs = (

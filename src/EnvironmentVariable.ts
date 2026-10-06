@@ -33,6 +33,7 @@ import {
   ManagementApi,
   type ManagementApiService,
   retryIdempotentWrite,
+  settle,
   settleVoid,
 } from "./ManagementApi.ts";
 import type { Providers } from "./Providers.ts";
@@ -49,25 +50,39 @@ export const findVariable = (
   Object.hasOwn(list.environmentVariables, name) ? { deployment, name } : undefined;
 
 /**
- * One attempt to set one variable, or to remove it when `value` is null. The
- * deployment answers 200 with an empty body, so this reads no response data.
+ * One attempt to set variables, or to remove those whose `value` is null, in
+ * one call. The deployment answers 200 with an empty body, so this reads no
+ * response data.
  */
-const writeVariable = (
+export const writeVariables = (
   deployment: string,
   deployKey: Redacted.Redacted<string>,
-  name: string,
-  value: string | Redacted.Redacted<string> | null,
+  changes: ReadonlyArray<{
+    readonly name: string;
+    readonly value: string | Redacted.Redacted<string> | null;
+  }>,
 ) =>
   settleVoid("update environment variables", () =>
     createDeploymentClient(deployment, Redacted.value(deployKey)).POST(
       "/update_environment_variables",
       {
         body: {
-          changes: [{ name, value: Redacted.isRedacted(value) ? Redacted.value(value) : value }],
+          changes: changes.map(({ name, value }) => ({
+            name,
+            value: Redacted.isRedacted(value) ? Redacted.value(value) : value,
+          })),
         },
       },
     ),
   );
+
+/** One attempt to set one variable, or to remove it when `value` is null. */
+const writeVariable = (
+  deployment: string,
+  deployKey: Redacted.Redacted<string>,
+  name: string,
+  value: string | Redacted.Redacted<string> | null,
+) => writeVariables(deployment, deployKey, [{ name, value }]);
 
 /**
  * Sets one variable, or removes it when `value` is null. The call sets a
@@ -86,6 +101,18 @@ export const updateVariable = (
 export const EnvironmentVariableList = Schema.Struct({
   environmentVariables: Schema.Record(Schema.String, Schema.String),
 });
+
+/** Every variable of the deployment with its value. Fails with a 404 when the deployment is gone. */
+export const listVariables = (deployment: string, deployKey: Redacted.Redacted<string>) =>
+  settle("list environment variables", () =>
+    createDeploymentClient(deployment, Redacted.value(deployKey)).GET(
+      "/list_environment_variables",
+    ),
+  ).pipe(
+    Effect.map(
+      (body) => Schema.decodeUnknownSync(EnvironmentVariableList)(body).environmentVariables,
+    ),
+  );
 
 /** The variable's identity, or undefined when the variable or the deployment is absent. */
 const readVariable = (

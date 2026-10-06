@@ -1,0 +1,8 @@
+{
+  "name": "alchemy-convex-fixture-app",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "convex": "^1.45.0"
+  }
+}
