@@ -6,12 +6,12 @@ One Alchemy stack can now own a Convex app end to end: it creates the deployment
 functions, and gives the URLs to a Cloudflare Worker or a Vite site.
 
 - `Convex.Deployment`: `{ projectId, type: "prod" }` takes over the project's default production
-  deployment. `{ projectId, type: "dev" | "preview", name }` creates a dev deployment with `name` as
+  deployment, and follows it when another production deployment becomes the default. `{ projectId, type: "dev" | "preview", name }` creates a dev deployment with `name` as
   its reference, or a preview deployment with `name` as its preview name, through
   `POST /projects/{project_id}/create_deployment`. Outputs `name`, `url`, `siteUrl`, `type`,
   `projectId`, `reference`, and `previewName`.
 - `Convex.Deployment` keeps every deployment by default (removal policy `retain`) and never deletes
-  a production deployment. A dev or preview deployment that is not in state is taken over only
+  a production deployment: delete reads the live type first. A dev or preview deployment that is not in state is taken over only
   with `--adopt`, and the resource never creates over it. A change of `projectId`, `type`, or
   `name` stops the deploy with `DeploymentIdentityChange`. An expired preview deployment is
   created again on the next deploy.

@@ -353,7 +353,44 @@ describe("Convex.Deployment", () => {
         1,
       );
       yield* stack.destroy();
-      expect(fake.lines()).toContain(`POST ${API}/deployments/${out.name}/delete`);
+      expect(fake.lines().filter((line) => line.endsWith("/delete"))).toEqual([]);
+    }),
+  );
+
+  test.provider(
+    "keeps a dev deployment that became a production deployment, also with destroy()",
+    (stack) =>
+      Effect.gen(function* () {
+        const fake = new FakeConvex().install();
+        const projectId = fake.addProject({ name: NAME, teamId: TEAM });
+        const out = yield* stack.deploy(destroyable({ projectId, type: "dev", name: "staging" }));
+        // Someone makes the deployment a production deployment in Convex.
+        const row = fake.deployments.find((candidate) => candidate["name"] === out.name);
+        if (row !== undefined) row["deploymentType"] = "prod";
+        yield* stack.destroy();
+        expect(fake.lines().filter((line) => line.endsWith("/delete"))).toEqual([]);
+        expect(fake.deployment(out.name)?.deploymentType).toBe("prod");
+      }),
+  );
+
+  test.provider("follows a new default production deployment of the project", (stack) =>
+    Effect.gen(function* () {
+      const fake = new FakeConvex().install();
+      const projectId = fake.addProject({ name: NAME, teamId: TEAM });
+      const first = yield* stack.deploy(deployment({ projectId, type: "prod" }));
+      // Another production deployment becomes the default; the first one stays.
+      const next = fake.addDeployment({ projectId, type: "dev", name: "production-2" });
+      for (const row of fake.deployments) {
+        if (row["name"] === first.name) row["isDefault"] = false;
+        if (row["name"] === next) {
+          row["deploymentType"] = "prod";
+          row["isDefault"] = true;
+        }
+      }
+      const second = yield* stack.deploy(deployment({ projectId, type: "prod" }));
+      expect(second.name).toBe(next);
+      expect(second.url).toBe(`https://${next}.convex.cloud`);
+      expect(fake.deployment(first.name)).toBeDefined();
     }),
   );
 });

@@ -152,7 +152,8 @@ replace, or overwrite your data by accident:
   value, because a delete would revoke the OAuth token. Use a team access token or the Convex CLI
   login.
 - `Convex.Deployment` has the removal policy `retain` for every type. It never deletes a
-  production deployment, also not with `RemovalPolicy.destroy()`: delete the project for that. A
+  production deployment, also not with `RemovalPolicy.destroy()` and also not a dev deployment that
+  became a production deployment: delete the project for that. A
   dev or preview deployment is deleted only with `RemovalPolicy.destroy()`.
 - `Convex.Deployment` takes over the project's production deployment without `--adopt`: Convex
   creates it with the project, and the resource never changes or deletes it. A dev or preview
@@ -198,8 +199,9 @@ the Convex dashboard.
   `{ projectId, type: "dev" | "preview", name }`. Outputs `name` (such as `happy-animal-123`),
   `url` (`https://<name>.convex.cloud`, with the region outside US East), `siteUrl` (the same
   host on `.convex.site`), `type`, `projectId`, `reference`, and `previewName`.
-  - `prod` takes over the project's default production deployment. It never creates one: a
-    project without one stops the deploy with `ProductionDeploymentNotFound`.
+  - `prod` takes over the project's default production deployment, and follows it when another
+    production deployment becomes the default. It never creates one: a project without one stops
+    the deploy with `ProductionDeploymentNotFound`.
   - `dev` creates a dev deployment with `name` as its reference, through
     `POST /projects/{project_id}/create_deployment`. Convex records the member of the access token
     as its creator. It is not that member's default dev deployment, so `npx convex dev` does not
@@ -237,9 +239,9 @@ the Convex dashboard.
     runs them.
 - `Convex.DeployKey`: `{ deployment, name, allowedActions? }`. Outputs `uniqueName`, `keyId`, and
   the `deployKey` secret. Any change replaces the key. Delete revokes the key by its secret; a key
-  from 0.1 state stays. Keys are never adopted: a key without its secret is useless. A key for
-  `Convex.Code` needs at least `deployment:deploy`, and `deployment:env:view` and
-  `deployment:env:write` for `env`.
+  from 0.1 state stays. Keys are never adopted: a key without its secret is useless. The live test
+  pushes with `Convex.Code` and sets `env` with a key that has only `deployment:deploy`,
+  `deployment:env:view`, and `deployment:env:write`.
 - `Convex.PreviewDeployKey`: `{ projectId, name }`. Project-level key for preview deployments.
   Outputs `uniqueName`, `keyId`, and `previewDeployKey`.
 - `Convex.EnvironmentVariable`: `{ deployment, deployKey, name, value }`. One variable on one

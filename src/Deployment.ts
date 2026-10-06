@@ -4,8 +4,12 @@
 // - `prod` is the project's default production deployment. Convex creates it
 //   with the project, so this resource never creates one. It takes the
 //   deployment over without --adopt: it never changes or deletes a production
-//   deployment, so the takeover cannot lose data. To delete a production
-//   deployment, delete its project (Convex.Project with RemovalPolicy.destroy()).
+//   deployment, so the takeover cannot lose data. It follows the default:
+//   when another production deployment becomes the default, the next deploy
+//   outputs that one. To delete a production deployment, delete its project
+//   (Convex.Project with RemovalPolicy.destroy()). Delete reads the live type
+//   first, so a dev or preview deployment that became a production
+//   deployment is not deleted either.
 // - `dev` and `preview` are created with POST
 //   /projects/{project_id}/create_deployment and the `name` prop as the
 //   reference. Convex keeps a dev reference as given. For a preview, Convex
@@ -283,6 +287,12 @@ export const DeploymentProvider = () =>
         diff: Effect.fn(function* ({ news, output }) {
           if (!isResolved(news) || output === undefined) return undefined;
           yield* checkIdentity(output, news);
+          // `prod` follows the project's default production deployment,
+          // which can change in Convex. Reconcile then returns the new one.
+          if (news.type === "prod") {
+            const production = yield* lookup(news);
+            return production?.name === output.name ? undefined : ({ action: "update" } as const);
+          }
           // A preview expires, and anyone can delete a deployment. Reconcile
           // then finds or creates it again, so the stack never hands out the
           // URL of a deployment that is gone.
@@ -291,6 +301,9 @@ export const DeploymentProvider = () =>
         }),
 
         read: Effect.fn(function* ({ olds, output }) {
+          if (output?.type === "prod") {
+            return yield* lookup({ projectId: output.projectId, type: "prod" });
+          }
           if (output !== undefined) {
             const live = yield* getByName(output.name);
             return live === undefined
@@ -307,9 +320,18 @@ export const DeploymentProvider = () =>
         }),
 
         reconcile: Effect.fn(function* ({ fqn, news, output }) {
+          // Also here: with an unresolved prop in plan, diff could not check.
+          if (output !== undefined) yield* checkIdentity(output, news);
+          if (news.type === "prod") {
+            // Always the current default, also when another production
+            // deployment became the default after the last deploy.
+            const production = yield* lookup(news);
+            if (production === undefined) {
+              return yield* new ProductionDeploymentNotFound({ projectId: news.projectId });
+            }
+            return production;
+          }
           if (output !== undefined) {
-            // Also here: with an unresolved prop in plan, diff could not check.
-            yield* checkIdentity(output, news);
             const live = yield* getByName(output.name);
             if (live !== undefined) {
               if (live.deploymentType !== output.type) {
@@ -327,13 +349,6 @@ export const DeploymentProvider = () =>
             }
             // The deployment in state is gone, such as an expired preview.
             // Find or create it below like a resource without state.
-          }
-          if (news.type === "prod") {
-            const production = yield* lookup(news);
-            if (production === undefined) {
-              return yield* new ProductionDeploymentNotFound({ projectId: news.projectId });
-            }
-            return production;
           }
           // Never create over an existing deployment: a preview create
           // replaces the preview deployment with the same name. Another
@@ -364,13 +379,16 @@ export const DeploymentProvider = () =>
 
         // Runs only with RemovalPolicy.destroy(): the default policy is `retain`.
         delete: Effect.fn(function* ({ output }) {
-          if (output.type === "prod") {
-            yield* Effect.logWarning(
-              `Convex.Deployment does not delete production deployment ${output.name}: it belongs to project ${output.projectId}. To delete it, delete the project with RemovalPolicy.destroy() on Convex.Project.`,
-            );
-            return;
-          }
+          const keep = Effect.logWarning(
+            `Convex.Deployment does not delete production deployment ${output.name}: it belongs to project ${output.projectId}. To delete it, delete the project with RemovalPolicy.destroy() on Convex.Project.`,
+          );
+          if (output.type === "prod") return yield* keep;
+          // The type in state can be old: a dev or preview deployment can
+          // become a production deployment in Convex. The live type decides.
+          const live = yield* getByName(output.name);
           // 404: an earlier attempt, the expiry, or someone else deleted it.
+          if (live === undefined) return;
+          if (live.deploymentType === "prod") return yield* keep;
           yield* absentAsUndefined(
             retryIdempotentWrite(
               api.requestVoid("delete deployment", (client) =>
