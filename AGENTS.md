@@ -5,10 +5,11 @@
 
 ## Ownership rule
 
-- This package manages only the Convex control plane: projects, deploy keys, environment
-  variables, project default environment variables, and the deploy step.
-- The Convex CLI owns typecheck, codegen, bundling, and the code push. `Convex.Deploy` only runs
-  `npx convex deploy`. Do not move work of the Convex CLI into this package.
+- This package manages only the Convex control plane: projects, deployments, deploy keys,
+  environment variables, project default environment variables, and the code push.
+- The Convex CLI owns typecheck, codegen, bundling, and the code push. `Convex.Code` only runs the
+  installed `convex deploy` (the deprecated `Convex.Deploy` runs `npx convex deploy`). Do not move
+  work of the Convex CLI into this package.
 
 ## Commands
 
