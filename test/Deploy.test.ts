@@ -10,13 +10,8 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import { afterAll, describe, expect, it } from "vitest";
-import {
-  type Deploy,
-  type DeployProps,
-  DeployProvider,
-  deployArgs,
-  parseDeployOutput,
-} from "../src/Deploy.ts";
+import { parseDeployOutput } from "../src/Code.ts";
+import { type Deploy, type DeployProps, DeployProvider, deployArgs } from "../src/Deploy.ts";
 
 // Real `npx convex deploy` stderr (convex 1.45.0) through pipes, as Alchemy's
 // CommandExecutor receives it, against the throwaway dev deployment

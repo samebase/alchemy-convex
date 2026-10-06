@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.3.0
+
+One Alchemy stack can now own a Convex app end to end: it creates the deployment, pushes the
+functions, and gives the URLs to a Cloudflare Worker or a Vite site.
+
+- `Convex.Deployment`: `{ projectId, type: "prod" }` takes over the project's default production
+  deployment, and follows it when another production deployment becomes the default. `{ projectId, type: "dev" | "preview", name }` creates a dev deployment with `name` as
+  its reference, or a preview deployment with `name` as its preview name, through
+  `POST /projects/{project_id}/create_deployment`. Outputs `name`, `url`, `siteUrl`, `type`,
+  `projectId`, `reference`, and `previewName`.
+- `Convex.Deployment` keeps every deployment by default (removal policy `retain`) and never deletes
+  a production deployment: delete reads the live type first. A dev or preview deployment that is not in state is taken over only
+  with `--adopt`, and the resource never creates over it. A change of `projectId`, `type`, or
+  `name` stops the deploy with `DeploymentIdentityChange`. An expired preview deployment is
+  created again on the next deploy.
+- `Convex.Code`: pushes the functions with the `convex` package that `cwd` resolves, on every
+  deploy. The deploy key goes only into an env file with mode 0600 that is removed after the run.
+  The CLI output stays out of the logs, and a failure shows its last lines without the key. The
+  key must fit the deployment before the push, and the CLI must name the same deployment after
+  it. A preview deploy key pushes with `--preview-name`. `env` sets deployment variables before
+  the push. Outputs `url`, `siteUrl`, `deploymentName`, `deployedAt`, and `envNames`.
+- `Convex.Deploy` is deprecated. It keeps working, so that stacks and state from 0.1 and 0.2 do not
+  break. Use `Convex.Code` with a `Convex.Deployment`.
+- `parseDeployOutput` moves to `Convex.Code`. The export from the package stays the same.
+
 ## 0.2.0
 
 Data safety release. An accident can no longer delete a Convex project or its data, revoke the

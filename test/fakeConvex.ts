@@ -50,6 +50,14 @@ const Changes = Schema.Struct({
     }),
   ),
 });
+const DeploymentFields = Schema.Struct({
+  name: Schema.String,
+  projectId: Schema.Number,
+  deploymentType: Schema.String,
+  isDefault: Schema.Boolean,
+  reference: Schema.String,
+  previewIdentifier: Schema.NullOr(Schema.String),
+});
 const ProjectFields = Schema.Struct({
   id: Schema.Number,
   name: Schema.String,
@@ -74,6 +82,11 @@ export class FakeConvex {
   readonly previewKeys = new Map<number, Key[]>();
   /** Environment variables for each deployment name. */
   readonly variables = new Map<string, Record<string, string>>();
+  /**
+   * Deployment rows: recorded list_deployments rows with changed fields.
+   * addProject adds the project's default production deployment.
+   */
+  readonly deployments: Record<string, unknown>[] = [];
   /** Project default environment variables. */
   readonly defaults: { projectId: number; name: string; deploymentType: string }[] = [];
   /**
@@ -120,7 +133,65 @@ export class FakeConvex {
       prodDeploymentName,
       devDeploymentName: null,
     });
+    this.deployments.push(
+      this.deploymentRow({
+        name: prodDeploymentName,
+        projectId: id,
+        deploymentType: "prod",
+        isDefault: true,
+        reference: "production",
+        previewIdentifier: null,
+      }),
+    );
     return id;
+  }
+
+  /** The current row of a deployment, decoded. */
+  deployment(name: string) {
+    const row = this.deployments.find((candidate) => candidate["name"] === name);
+    return row === undefined ? undefined : Schema.decodeUnknownSync(DeploymentFields)(row);
+  }
+
+  /** The deployment rows of a project, decoded. */
+  deploymentsOf(projectId: number) {
+    return this.deployments
+      .map((row) => Schema.decodeUnknownSync(DeploymentFields)(row))
+      .filter((row) => row.projectId === projectId);
+  }
+
+  /**
+   * Adds a dev or preview deployment as Convex lists it, such as one that
+   * `npx convex deploy --preview-name` created, and returns its name.
+   */
+  addDeployment(fields: {
+    readonly projectId: number;
+    readonly type: "dev" | "preview";
+    readonly name: string;
+  }) {
+    const name = `fake-${fields.type}-${this.nextId++}`;
+    this.deployments.push(
+      this.deploymentRow({
+        name,
+        projectId: fields.projectId,
+        deploymentType: fields.type,
+        isDefault: false,
+        // Convex derives a preview reference from the preview name.
+        reference:
+          fields.type === "preview"
+            ? `preview/${fields.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`
+            : fields.name,
+        previewIdentifier: fields.type === "preview" ? fields.name : null,
+      }),
+    );
+    return name;
+  }
+
+  private deploymentRow(fields: typeof DeploymentFields.Type) {
+    return {
+      ...recordedDeploymentRow,
+      ...fields,
+      deploymentUrl: `https://${fields.name}.convex.cloud`,
+    };
   }
 
   /** The current row of a project, decoded. */
@@ -202,24 +273,38 @@ export class FakeConvex {
         const index = this.projects.findIndex((candidate) => candidate["id"] === id);
         if (index === -1) return notFound("ProjectNotFound");
         this.projects.splice(index, 1);
+        for (const row of this.deploymentsOf(id)) this.removeDeployment(row.name);
         return empty();
       }
       case "GET /v1/projects/{id}/list_deployments": {
-        const row = this.project(id);
-        if (row === undefined) return notFound("ProjectNotFound");
-        return json(200, [
-          {
-            ...recordedDeploymentRow,
-            name: row.prodDeploymentName,
-            projectId: id,
-            deploymentType: "prod",
-            isDefault: true,
-            deploymentUrl: `https://${row.prodDeploymentName}.convex.cloud`,
-          },
-        ]);
+        if (this.project(id) === undefined) return notFound("ProjectNotFound");
+        const type = url.searchParams.get("deploymentType");
+        const isDefault = url.searchParams.get("isDefault");
+        const names = this.deploymentsOf(id)
+          .filter((row) => type === null || row.deploymentType === type)
+          .filter((row) => isDefault === null || String(row.isDefault) === isDefault)
+          .map((row) => row.name);
+        return json(
+          200,
+          this.deployments.filter((row) => names.includes(String(row["name"]))),
+        );
       }
+      case "POST /v1/projects/{id}/create_deployment":
+        return this.createDeployment(id, body);
       default:
         break;
+    }
+    const deploymentPath = /^\/v1\/deployments\/([^/]+)$/.exec(url.pathname)?.[1];
+    if (method === "GET" && deploymentPath !== undefined) {
+      const row = this.deployments.find((candidate) => candidate["name"] === deploymentPath);
+      // GET /deployments/{name} answers no preview identifier, also for a preview.
+      return row === undefined
+        ? this.deploymentNotFound(deploymentPath)
+        : json(200, {
+            ...recorded("deployment_get_preview.json"),
+            ...row,
+            previewIdentifier: null,
+          });
     }
     // Keys and project defaults: /v1/deployments/{name}/<route> and /v1/projects/{id}/<route>.
     const keyRoute = /^\/v1\/(?:deployments\/[^/]+|projects\/\d+)\/(\w+)$/.exec(url.pathname)?.[1];
@@ -243,7 +328,12 @@ export class FakeConvex {
           id: this.nextId++,
           // Convex lists a key under the requested name, and adds a suffix when the name is taken.
           name: keys.some((other) => other.name === name) ? `${name} (${randomUUID()})` : name,
-          secret: `${recordedSecret}-${this.nextId}`,
+          // The recorded secret with this key's target in the prefix, as
+          // Convex makes them: `dev:<deployment>|...` and `preview:<team>:<project>|...`.
+          secret:
+            keyRoute === "create_deploy_key"
+              ? `${recordedSecret.replace("beaming-okapi-932", deployment)}-${this.nextId}`
+              : `preview:nicu:${this.project(id)?.name}${recordedSecret.slice(recordedSecret.indexOf("|"))}-${this.nextId}`,
         };
         keys.push(key);
         return json(
@@ -260,6 +350,11 @@ export class FakeConvex {
           ...recorded("project_list_preview_deploy_keys.json"),
           items: this.keyRows(keys),
         });
+      case "POST delete": {
+        if (this.deployment(deployment) === undefined) return this.deploymentNotFound(deployment);
+        this.removeDeployment(deployment);
+        return empty();
+      }
       case "POST delete_deploy_key":
       case "POST delete_preview_deploy_key": {
         const index = keys.findIndex(
@@ -336,6 +431,46 @@ export class FakeConvex {
       default:
         throw new Error(`FakeConvex has no route for ${method} ${url.host}${url.pathname}`);
     }
+  }
+
+  /**
+   * POST /projects/{id}/create_deployment as Convex answers it: a preview
+   * needs a reference, a preview create replaces the preview deployment with
+   * the same preview name, and a dev reference must be new.
+   */
+  private createDeployment(projectId: number, body: Record<string, unknown> | undefined) {
+    const type = body?.["type"];
+    const reference = body?.["reference"];
+    if (type !== "dev" && type !== "preview")
+      throw new Error(`FakeConvex cannot create ${String(type)}`);
+    if (typeof reference !== "string") {
+      return json(400, recorded("project_create_deployment_missing_reference.json"));
+    }
+    if (type === "preview") {
+      for (const row of this.deploymentsOf(projectId)) {
+        if (row.previewIdentifier === reference) this.removeDeployment(row.name);
+      }
+    } else if (this.deploymentsOf(projectId).some((row) => row.reference === reference)) {
+      return json(400, {
+        ...recorded("project_create_deployment_reference_exists.json"),
+        message: `A deployment with the reference '${reference}' already exists in this project.`,
+      });
+    }
+    const name = this.addDeployment({ projectId, type, name: reference });
+    const row = this.deployments.find((candidate) => candidate["name"] === name);
+    return json(200, { ...recorded(`project_create_deployment_${type}.json`), ...row });
+  }
+
+  private removeDeployment(name: string) {
+    const index = this.deployments.findIndex((row) => row["name"] === name);
+    if (index !== -1) this.deployments.splice(index, 1);
+  }
+
+  private deploymentNotFound(name: string) {
+    return json(404, {
+      ...recorded("deployment_not_found.json"),
+      message: `The requested deployment ${name} does not exist`,
+    });
   }
 
   private listProjects(teamId: number, query: URLSearchParams): Response {

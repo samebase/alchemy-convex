@@ -9,7 +9,7 @@ import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
 import { fromConfig } from "../../src/Credentials.ts";
-import { parseDeployOutput } from "../../src/Deploy.ts";
+import { parseDeployOutput } from "../../src/Code.ts";
 import { absentAsUndefined, ManagementApi, ManagementApiLive } from "../../src/ManagementApi.ts";
 import { liveTargets } from "./env.ts";
 

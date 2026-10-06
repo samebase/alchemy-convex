@@ -3,6 +3,7 @@
 import { CommandExecutorLive } from "alchemy/Command";
 import * as Provider from "alchemy/Provider";
 import * as Layer from "effect/Layer";
+import { Code, CodeProvider } from "./Code.ts";
 import { type Credentials, fromConfig } from "./Credentials.ts";
 import {
   DefaultEnvironmentVariable,
@@ -10,6 +11,7 @@ import {
 } from "./DefaultEnvironmentVariable.ts";
 import { Deploy, DeployProvider } from "./Deploy.ts";
 import { DeployKey, DeployKeyProvider } from "./DeployKey.ts";
+import { Deployment, DeploymentProvider } from "./Deployment.ts";
 import { EnvironmentVariable, EnvironmentVariableProvider } from "./EnvironmentVariable.ts";
 import { ManagementApiLive } from "./ManagementApi.ts";
 import { PreviewDeployKey, PreviewDeployKeyProvider } from "./PreviewDeployKey.ts";
@@ -26,26 +28,32 @@ export const providers = (credentials: Layer.Layer<Credentials> = fromConfig()) 
     Providers,
     Provider.collection([
       Project,
+      Deployment,
       DeployKey,
       PreviewDeployKey,
       EnvironmentVariable,
       DefaultEnvironmentVariable,
+      Code,
       Deploy,
     ]),
   ).pipe(
     Layer.provide(
       Layer.mergeAll(
         ProjectProvider(),
+        DeploymentProvider(),
         DeployKeyProvider(),
         PreviewDeployKeyProvider(),
         EnvironmentVariableProvider(),
         DefaultEnvironmentVariableProvider(),
+        CodeProvider(),
         DeployProvider(),
       ),
     ),
     Layer.provide(ManagementApiLive()),
     Layer.provide(credentials),
-    // Convex.Deploy runs the Convex CLI through Alchemy's command executor.
+    // The deprecated Convex.Deploy runs the Convex CLI through Alchemy's
+    // command executor. Convex.Code spawns it itself, so that its output
+    // stays out of the logs.
     Layer.provide(CommandExecutorLive()),
     Layer.orDie,
   );

@@ -1,5 +1,17 @@
 // @samebase/alchemy-convex: Convex resources for Alchemy v2.
 export {
+  Code,
+  type CodeAttributes,
+  type CodeDeployment,
+  type CodeProps,
+  CodePushFailed,
+  ConvexCliNotFound,
+  DeployKeyMismatch,
+  EnvironmentNeedsDeployKey,
+  parseDeployOutput,
+  PushTargetMismatch,
+} from "./Code.ts";
+export {
   ACCESS_TOKEN_ENV,
   Credentials,
   CredentialsError,
@@ -19,7 +31,6 @@ export {
   deployArgs,
   DeployOutputError,
   type DeployProps,
-  parseDeployOutput,
 } from "./Deploy.ts";
 export {
   DeployKey,
@@ -29,6 +40,14 @@ export {
   type DeployKeyProps,
   DeployKeyRecoveryRequired,
 } from "./DeployKey.ts";
+export {
+  AmbiguousDeployment,
+  Deployment,
+  type DeploymentAttributes,
+  DeploymentIdentityChange,
+  type DeploymentProps,
+  ProductionDeploymentNotFound,
+} from "./Deployment.ts";
 export {
   EnvironmentVariable,
   type EnvironmentVariableAttributes,
