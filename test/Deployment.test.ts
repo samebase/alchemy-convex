@@ -1,11 +1,15 @@
 // Convex.Deployment through the real Alchemy engine, against FakeConvex. Each
 // test gets a fresh in-memory state.
 import { adopt } from "alchemy/AdoptPolicy";
+import * as Provider from "alchemy/Provider";
 import * as RemovalPolicy from "alchemy/RemovalPolicy";
 import * as Test from "alchemy/Test/Vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
-import { describe, expect } from "vitest";
+import { describe, expect, it } from "vitest";
+import { DeploymentProvider } from "../src/Deployment.ts";
+import { ManagementApiLive } from "../src/ManagementApi.ts";
 import * as Convex from "../src/index.ts";
 import { FakeConvex } from "./fakeConvex.ts";
 
@@ -393,4 +397,75 @@ describe("Convex.Deployment", () => {
       expect(fake.deployment(first.name)).toBeDefined();
     }),
   );
+
+  test.provider("plans dependents again when the new default has another reference", (stack) =>
+    Effect.gen(function* () {
+      const fake = new FakeConvex().install();
+      const projectId = fake.addProject({ name: NAME, teamId: TEAM });
+      const deployment = fake.project(projectId)?.prodDeploymentName ?? "";
+      const withVariable = Effect.gen(function* () {
+        const prod = yield* Convex.Deployment("Prod", { projectId, type: "prod" });
+        // A dependent that uses only the reference.
+        yield* Convex.EnvironmentVariable("Reference", {
+          deployment,
+          deployKey: Redacted.make(`dev:${deployment}|REDACTED`),
+          name: "PRODUCTION_REFERENCE",
+          value: prod.reference,
+        });
+        return { reference: prod.reference };
+      });
+      yield* stack.deploy(withVariable);
+      expect(fake.variables.get(deployment)).toEqual({ PRODUCTION_REFERENCE: "production" });
+      const next = fake.addDeployment({ projectId, type: "dev", name: "production-2" });
+      for (const row of fake.deployments) {
+        if (row["isDefault"] === true) row["isDefault"] = false;
+        if (row["name"] === next) {
+          row["deploymentType"] = "prod";
+          row["isDefault"] = true;
+        }
+      }
+      const second = yield* stack.deploy(withVariable);
+      expect(second.reference).toBe("production-2");
+      expect(fake.variables.get(deployment)).toEqual({ PRODUCTION_REFERENCE: "production-2" });
+    }),
+  );
+});
+
+describe("Convex.Deployment read", () => {
+  it("reads the production deployment of a deleted project as absent", async () => {
+    const fake = new FakeConvex().install();
+    const projectId = fake.addProject({ name: NAME, teamId: TEAM });
+    const name = fake.project(projectId)?.prodDeploymentName ?? "";
+    fake.projects.length = 0;
+    const read = await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* Provider.Provider<Convex.Deployment>("Convex.Deployment");
+        return yield* (
+          service.read?.({
+            id: "Prod",
+            fqn: "Prod",
+            instanceId: "instance-1",
+            olds: { projectId, type: "prod" },
+            output: {
+              projectId,
+              type: "prod",
+              name,
+              reference: "production",
+              previewName: undefined,
+              url: `https://${name}.convex.cloud`,
+              siteUrl: `https://${name}.convex.site`,
+            },
+          }) ?? Effect.die("Convex.Deployment has no read")
+        );
+      }).pipe(
+        Effect.provide(
+          DeploymentProvider().pipe(
+            Layer.provide(ManagementApiLive()),
+            Layer.provide(Convex.fromToken(Redacted.make("test-token"))),
+          ),
+        ),
+      ),
+    );
+    expect(read).toBeUndefined();
+  });
 });

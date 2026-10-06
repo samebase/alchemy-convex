@@ -237,9 +237,14 @@ export const DeploymentProvider = () =>
           .pipe(Effect.map((body) => Schema.decodeUnknownSync(DeploymentRows)(body)));
 
       /** The project's default production deployment, or undefined. */
-      const defaultProduction = (projectId: number) =>
+      const production = (projectId: number) =>
         listDeployments(projectId, "prod", true).pipe(
-          Effect.map((rows) => rows.find((row) => row.deploymentType === "prod" && row.isDefault)),
+          Effect.map((rows) => {
+            const row = rows.find(
+              (candidate) => candidate.deploymentType === "prod" && candidate.isDefault,
+            );
+            return row === undefined ? undefined : attributesOf(row, "prod", undefined);
+          }),
         );
 
       /**
@@ -267,11 +272,7 @@ export const DeploymentProvider = () =>
       /** The deployment that the props name, for a resource without state. */
       const lookup = (news: DeploymentProps) =>
         news.type === "prod"
-          ? defaultProduction(news.projectId).pipe(
-              Effect.map((row) =>
-                row === undefined ? undefined : attributesOf(row, "prod", undefined),
-              ),
-            )
+          ? production(news.projectId)
           : findByName(news.projectId, news.type, news.name).pipe(
               Effect.map((row) =>
                 row === undefined ? undefined : attributesOf(row, news.type, news.name),
@@ -279,8 +280,10 @@ export const DeploymentProvider = () =>
             );
 
       return {
-        // `name` and the URLs change when an expired preview is created again.
-        stables: ["projectId", "type", "reference", "previewName"],
+        // `name`, `reference`, and the URLs change when an expired preview is
+        // created again, or when another production deployment becomes the
+        // default.
+        stables: ["projectId", "type", "previewName"],
 
         // Compares with the attributes: after a refused change, `olds` are
         // the refused props.
@@ -290,8 +293,9 @@ export const DeploymentProvider = () =>
           // `prod` follows the project's default production deployment,
           // which can change in Convex. Reconcile then returns the new one.
           if (news.type === "prod") {
-            const production = yield* lookup(news);
-            return production?.name === output.name ? undefined : ({ action: "update" } as const);
+            // A 404 for a deleted project plans an update; reconcile then reports it.
+            const current = yield* absentAsUndefined(production(news.projectId));
+            return current?.name === output.name ? undefined : ({ action: "update" } as const);
           }
           // A preview expires, and anyone can delete a deployment. Reconcile
           // then finds or creates it again, so the stack never hands out the
@@ -302,7 +306,8 @@ export const DeploymentProvider = () =>
 
         read: Effect.fn(function* ({ olds, output }) {
           if (output?.type === "prod") {
-            return yield* lookup({ projectId: output.projectId, type: "prod" });
+            // 404: the project is gone, and so is its production deployment.
+            return yield* absentAsUndefined(production(output.projectId));
           }
           if (output !== undefined) {
             const live = yield* getByName(output.name);
@@ -325,11 +330,11 @@ export const DeploymentProvider = () =>
           if (news.type === "prod") {
             // Always the current default, also when another production
             // deployment became the default after the last deploy.
-            const production = yield* lookup(news);
-            if (production === undefined) {
+            const current = yield* production(news.projectId);
+            if (current === undefined) {
               return yield* new ProductionDeploymentNotFound({ projectId: news.projectId });
             }
-            return production;
+            return current;
           }
           if (output !== undefined) {
             const live = yield* getByName(output.name);

@@ -295,6 +295,9 @@ URL.
   with the same name. The Convex create then replaces it. The Management API has no create that
   fails for an existing preview name.
 - `siteUrl` is the `.convex.site` URL. A custom domain is not used.
+- When another production deployment becomes the default, a `DeployKey` with `deployment: prod.name`
+  gets a new key on the new deployment. Alchemy plans this as an update, not a replacement, so the
+  key on the old deployment stays. Delete it in the Convex dashboard.
 - Variables that `Convex.Code` set on a deployment stay there when `deployment` changes to
   another deployment, and when the resource is removed.
 - Not covered: deployment regions and classes, custom domains, log streams, teams and members,
