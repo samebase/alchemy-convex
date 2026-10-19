@@ -92,6 +92,8 @@ const makeApp = () => {
   const dir = mkdtempSync(join(tmpdir(), "alchemy-convex-plane-"));
   mkdirSync(join(dir, "convex"));
   copyFileSync(join(FIXTURE, "package.json"), join(dir, "package.json"));
+  // The content hash covers every file that git does not ignore.
+  writeFileSync(join(dir, ".gitignore"), "node_modules\n");
   symlinkSync(join(REPO, "node_modules"), join(dir, "node_modules"), "dir");
   return dir;
 };
@@ -235,6 +237,33 @@ const sequence = (created: number[], app: string) =>
     expect(pushKeyCalls(since(from3))).toHaveLength(2);
     report(`3. changed hello.ts: pushed again, query answers v2:one`);
 
+    // 3b. A failed push sets the variables back: new env and a broken function.
+    const broken = () => writeFileSync(join(app, "convex", "hello.ts"), "export const hello = ;\n");
+    broken();
+    const failed = yield* Effect.flip(prodStack.deploy(production("two")));
+    expect(failed).toMatchObject({ _tag: "CodePushFailed" });
+    expect(yield* hello(first.url)).toBe("v2:one");
+    writeQuery(app, "v2");
+    const from3b = sent.length;
+    const restored = yield* prodStack.deploy(production("one"));
+    expect(restored.hash).toBe(third.hash);
+    expect(pushKeyCalls(since(from3b))).toEqual([]);
+    report("3b. failed push with env two: PLANE_VAR is back to one, and the old props are a no-op");
+
+    // 3c. A production deployment with code needs --adopt in another state.
+    const otherState = Core.scratchStack(tokenOptions, `alchemy-convex-plane-other-${hex}`);
+    const takeover = Effect.gen(function* () {
+      const prod = yield* Convex.Deployment("Prod", {
+        project: { projectId: first.projectId },
+        type: "prod",
+        source,
+      });
+      return { name: prod.name };
+    });
+    const refusedProd = yield* Effect.flip(otherState.deploy(takeover));
+    expect(refusedProd).toMatchObject({ _tag: "OwnedBySomeoneElse" });
+    report(`3c. another state refused to push to ${first.name} without --adopt`);
+
     // 4. Take the project over by slug in another state, only with --adopt.
     const bySlug = Effect.gen(function* () {
       const project = yield* Convex.Project("Project", { team, slug: first.slug });
@@ -263,6 +292,24 @@ const sequence = (created: number[], app: string) =>
       }).pipe(RemovalPolicy.destroy());
       return { name: deployment.name, previewName: deployment.previewName, url: deployment.url };
     });
+    // A failed first push deletes the preview deployment that it created.
+    broken();
+    const failedPreview = yield* Effect.flip(previewStack.deploy(preview));
+    expect(failedPreview).toMatchObject({ _tag: "CodePushFailed" });
+    const previews = Schema.decodeUnknownSync(
+      Schema.Array(
+        Schema.Struct({ previewIdentifier: Schema.optionalKey(Schema.NullOr(Schema.String)) }),
+      ),
+    )(
+      yield* api.request("list deployments", (client) =>
+        client.GET("/projects/{project_id}/list_deployments", {
+          params: { path: { project_id: first.projectId }, query: { deploymentType: "preview" } },
+        }),
+      ),
+    );
+    expect(previews.filter((row) => row.previewIdentifier === previewStage)).toEqual([]);
+    report(`5a. a failed first push to preview ${previewStage} deleted the deployment it created`);
+    writeQuery(app, "v2");
     const previewOut = yield* previewStack.deploy(preview);
     expect(previewOut.previewName).toBe(previewStage);
     expect(yield* hello(previewOut.url)).toBe("v2:preview");

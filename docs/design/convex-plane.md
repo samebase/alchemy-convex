@@ -4,8 +4,7 @@ Sources: Confect [#408](https://github.com/rjdellecese/confect/issues/408) ("Con
 [rjdellecese/confect#735](https://github.com/rjdellecese/confect/pull/735) (head `9a3eab2`), and
 `alchemy@2.0.0-beta.80` (Worker, Neon, `Command.Build`).
 
-Problem: version 0.3 is shaped for Workers Builds. Key resources hand keys to a build outside
-Alchemy, `Code` takes a key from another resource and pushes on every apply.
+Problem: 0.3 is shaped for Workers Builds: keys go to a build outside Alchemy, `Code` takes one.
 
 ## Decision: adopt the 408 model, keep our implementation, do not vendor or depend
 
@@ -24,11 +23,11 @@ Alchemy, `Code` takes a key from another resource and pushes on every apply.
 
 ## Decisions inside the model
 
-- Content identity: the deployment hashes the `source` files, package.json, convex.json, the
-  nearest lockfile (Alchemy `hashDirectory`), the deployment name, and `env`. The same hash is a
-  `noop`, as for the Worker bundle and Neon `codeHash`. The hash is taken again after the push, so
-  `convex/_generated` from codegen does not cause a second push. Limit: a change in a workspace
-  package outside the app directory is not seen.
+- Content identity: the deployment hashes the app's files that git does not ignore and the nearest
+  lockfile (Alchemy `hashDirectory`), the deployment name, and `env`. The same hash is a `noop`, as
+  for the Worker bundle and Neon `codeHash`. The hash is taken again after the push, so generated
+  files (`convex/_generated`, a convex-hosting version file) do not cause a second push. A failed
+  push sets the changed variables back and deletes a deployment that the same run created.
 - Push credential: no key resource. With the Management API token, each push creates a deploy key
   with three actions and `expiresAt` two hours ahead, and deletes it after the push, also after a
   failure. Reason: no long-lived key in state or outputs. An OAuth token comes back as the key, so
@@ -42,13 +41,14 @@ Alchemy, `Code` takes a key from another resource and pushes on every apply.
   create a project or a deployment that a key cannot reach.
 - `Project` takes `{ team, slug }` (official `GET /teams/{team}/projects/{slug}`) next to
   `{ team, name }`. Both need `--adopt` for an object not in state.
+- A production deployment with code, not in state, needs `--adopt` (an empty one does not).
 - Kept invariants: never replace or delete a deployment on an input change (identity errors), retain
   by default, never delete production, ids from state and not URLs, all pages of a listing, OCC
   retries, never revoke a credential that an app runs on (the only key deleted is the push key).
 - `env` stays on the deployment and is not a resource: the push needs it first, and destroy does not
   remove variables, so required variables (Convex Auth keys) never block a destroy.
 - `source: { path, command, include }` runs a push command such as `convex-hosting deploy --build`
-  with the key in `CONVEX_DEPLOY_KEY`; `include` adds build inputs to the hash. Proven on a copy of
+  with the key in `CONVEX_DEPLOY_KEY`; `include` narrows the hash to the inputs. Proven on a copy of
   the convex-hosting tanstack-spa example: deploy and serve, no-op, a changed route redeploys.
 - Removed: `Code`, `Deploy`, `DeployKey`, `PreviewDeployKey`, `EnvironmentVariable`,
   `DefaultEnvironmentVariable`.

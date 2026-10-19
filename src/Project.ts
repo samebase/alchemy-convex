@@ -344,6 +344,16 @@ export const ProjectProvider = () =>
                 requestedSlug: news.slug,
               });
             }
+            if (olds.team !== news.team) {
+              const details = yield* getById(output.projectId);
+              if (details !== undefined && !isTeamOf(details, news.team)) {
+                return yield* new ProjectTeamChange({
+                  projectId: output.projectId,
+                  teamId: output.teamId,
+                  requestedTeamId: yield* api.resolveTeamId(news.team),
+                });
+              }
+            }
             // The resource changes nothing on the project.
             return { action: "noop" } as const;
           }

@@ -78,6 +78,20 @@ describe("Convex.Deployment", () => {
     }),
   );
 
+  test.provider("takes over a production deployment with code only with --adopt", (stack) =>
+    Effect.gen(function* () {
+      const fake = new FakeConvex().install();
+      const projectId = fake.addProject({ name: NAME, teamId: TEAM });
+      const name = fake.project(projectId)?.prodDeploymentName ?? "";
+      fake.markDeployed(name);
+      const props = { project: { projectId }, type: "prod" } as const;
+      const refused = yield* Effect.flip(stack.deploy(deployment(props)));
+      expect(refused).toMatchObject({ _tag: "OwnedBySomeoneElse" });
+      const adopted = yield* stack.deploy(deployment(props).pipe(adopt(true)));
+      expect(adopted.name).toBe(name);
+    }),
+  );
+
   test.provider("fails with ProductionDeploymentNotFound when the project has none", (stack) =>
     Effect.gen(function* () {
       const fake = new FakeConvex().install();

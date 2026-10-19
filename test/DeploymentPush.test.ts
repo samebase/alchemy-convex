@@ -337,6 +337,11 @@ const withDeployKey = Test.make({
 const withPreviewKey = Test.make({
   providers: Convex.providers(Convex.fromValues({ deployKey: Redacted.make(PREVIEW_KEY) })),
 });
+const withTokenAndPreviewKey = Test.make({
+  providers: Convex.providers(
+    Convex.fromValues({ accessToken: Redacted.make(TOKEN), deployKey: Redacted.make(PREVIEW_KEY) }),
+  ),
+});
 const withTokenAndKey = Test.make({
   providers: Convex.providers(
     Convex.fromValues({ accessToken: Redacted.make(TOKEN), deployKey: Redacted.make(DEPLOY_KEY) }),
@@ -353,7 +358,11 @@ describe("Convex.Deployment push with a deploy key", () => {
         expect(fake.project(projectId)?.prodDeploymentName).toBe(FIRST_PROD);
         fake.deploymentKeys.set(FIRST_PROD, DEPLOY_KEY);
         const props = { project: { projectId }, type: "prod", env: { A: "1" } } as const;
-        const out = yield* stack.deploy(backend(props, join(app, "convex")));
+        // The deployment API cannot say whether the deployment has code, so
+        // the first deploy takes it over only with --adopt.
+        const refused = yield* Effect.flip(stack.deploy(backend(props, join(app, "convex"))));
+        expect(refused).toMatchObject({ _tag: "OwnedBySomeoneElse" });
+        const out = yield* stack.deploy(backend(props, join(app, "convex")).pipe(adopt(true)));
         expect(out).toMatchObject({
           name: FIRST_PROD,
           url: `https://${FIRST_PROD}.convex.cloud`,
@@ -484,6 +493,117 @@ describe("Convex.Deployment with a preview deploy key", () => {
         );
         expect(error).toBeInstanceOf(Convex.EnvironmentNeedsDeployKey);
         expect(runs()).toEqual([]);
+        expect(fake.lines().filter((line) => line.endsWith("/create_deployment"))).toEqual([]);
+      }),
+  );
+
+  withTokenAndPreviewKey.test.provider(
+    "uses the access token for env even when the preview deploy key fits",
+    (stack) =>
+      Effect.gen(function* () {
+        const fake = new FakeConvex().install();
+        const projectId = fake.addProject({ name: NAME, teamId: TEAM });
+        const out = yield* stack.deploy(
+          backend(
+            { project: { projectId }, type: "preview", name: "pr-42", env: { A: "1" } },
+            join(app, "convex"),
+          ),
+        );
+        expect(fake.variables.get(out.name)).toEqual({ A: "1" });
+        expect(new Set(keyCalls(fake).map((request) => request.authorization))).toEqual(
+          new Set([`Bearer ${TOKEN}`]),
+        );
+      }),
+  );
+});
+
+describe("Convex.Deployment after a failed push", () => {
+  withToken.test.provider("sets the variables back to their earlier values", (stack) =>
+    Effect.gen(function* () {
+      const fake = new FakeConvex().install();
+      const projectId = fake.addProject({ name: NAME, teamId: TEAM });
+      const name = fake.project(projectId)?.prodDeploymentName ?? "";
+      const props = (env: Record<string, string>) =>
+        backend({ project: { projectId }, type: "prod", env }, join(app, "convex"));
+      const first = yield* stack.deploy(props({ A: "1", B: "2" }));
+      vi.stubEnv("ALCHEMY_CONVEX_FAKE_CLI_MODE", "fail");
+      yield* Effect.flip(stack.deploy(props({ A: "changed", C: "new" })));
+      expect(fake.variables.get(name)).toEqual({ A: "1", B: "2" });
+      // The earlier props match the deployment again: a no-op.
+      vi.stubEnv("ALCHEMY_CONVEX_FAKE_CLI_MODE", "ok");
+      const again = yield* stack.deploy(props({ A: "1", B: "2" }));
+      expect(again.hash).toBe(first.hash);
+      expect(runs()).toHaveLength(2);
+    }),
+  );
+
+  withToken.test.provider(
+    "deletes a preview deployment that the same run created, and never one it found",
+    (stack) =>
+      Effect.gen(function* () {
+        const fake = new FakeConvex().install();
+        const projectId = fake.addProject({ name: NAME, teamId: TEAM });
+        const props = { project: { projectId }, type: "preview", name: "pr-42" } as const;
+        vi.stubEnv("ALCHEMY_CONVEX_FAKE_CLI_MODE", "fail");
+        yield* Effect.flip(stack.deploy(backend(props, join(app, "convex"))));
+        expect(
+          fake.deploymentsOf(projectId).filter((row) => row.deploymentType === "preview"),
+        ).toEqual([]);
+        // The next run creates it again, without --adopt.
+        vi.stubEnv("ALCHEMY_CONVEX_FAKE_CLI_MODE", "ok");
+        const out = yield* stack.deploy(backend(props, join(app, "convex")));
+        expect(fake.deployment(out.name)?.previewIdentifier).toBe("pr-42");
+        // A failed push to a deployment in state keeps it.
+        writeFileSync(join(app, "convex", "hello.ts"), "export const changed = 1;\n");
+        vi.stubEnv("ALCHEMY_CONVEX_FAKE_CLI_MODE", "fail");
+        yield* Effect.flip(stack.deploy(backend(props, join(app, "convex"))));
+        expect(fake.deployment(out.name)).toBeDefined();
+      }),
+  );
+});
+
+describe("Convex.Deployment source checks", () => {
+  withToken.test.provider(
+    "hashes the whole app by default, and only the include globs with include",
+    (stack) =>
+      Effect.gen(function* () {
+        const fake = new FakeConvex().install();
+        const projectId = fake.addProject({ name: NAME, teamId: TEAM });
+        writeFileSync(join(app, "shared.ts"), "export const shared = 1;\n");
+        const plain = backend({ project: { projectId }, type: "prod" }, join(app, "convex"));
+        yield* stack.deploy(plain);
+        // A module outside convex/ that a function can import.
+        writeFileSync(join(app, "shared.ts"), "export const shared = 2;\n");
+        yield* stack.deploy(plain);
+        expect(runs()).toHaveLength(2);
+        const narrowed = backend(
+          {
+            project: { projectId },
+            type: "prod",
+            source: { path: join(app, "convex"), include: [] },
+          },
+          undefined,
+        );
+        yield* stack.deploy(narrowed);
+        writeFileSync(join(app, "shared.ts"), "export const shared = 3;\n");
+        yield* stack.deploy(narrowed);
+        expect(runs()).toHaveLength(3);
+      }),
+  );
+
+  withToken.test.provider(
+    "refuses a source that is not the functions directory of convex.json",
+    (stack) =>
+      Effect.gen(function* () {
+        const fake = new FakeConvex().install();
+        const projectId = fake.addProject({ name: NAME, teamId: TEAM });
+        writeFileSync(join(app, "convex.json"), JSON.stringify({ functions: "src/convex/" }));
+        const error = yield* Effect.flip(
+          stack.deploy(backend({ project: { projectId }, type: "prod" }, join(app, "convex"))),
+        );
+        expect(error).toMatchObject({ _tag: "SourceMismatch" });
+        expect(runs()).toEqual([]);
+        expect(keyCalls(fake)).toEqual([]);
       }),
   );
 });

@@ -179,12 +179,19 @@ export class FakeConvex {
     return name;
   }
 
+  /**
+   * A row for a deployment that has received no push yet: list_deployments
+   * leaves `lastDeployTime` out until the first push. `markDeployed` sets it.
+   */
   private deploymentRow(fields: typeof DeploymentFields.Type) {
-    return {
-      ...recordedDeploymentRow,
-      ...fields,
-      deploymentUrl: `https://${fields.name}.convex.cloud`,
-    };
+    const { lastDeployTime: _unset, ...row } = recordedDeploymentRow;
+    return { ...row, ...fields, deploymentUrl: `https://${fields.name}.convex.cloud` };
+  }
+
+  /** Gives a deployment the recorded `lastDeployTime`, as Convex does after a push. */
+  markDeployed(name: string) {
+    const row = this.deployments.find((candidate) => candidate["name"] === name);
+    if (row !== undefined) row["lastDeployTime"] = recordedDeploymentRow["lastDeployTime"];
   }
 
   /** The current row of a project, decoded. */

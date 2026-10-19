@@ -321,6 +321,16 @@ describe("Convex.Project", () => {
       }),
   );
 
+  test.provider("fails a team change of a slug project with ProjectTeamChange", (stack) =>
+    Effect.gen(function* () {
+      const fake = new FakeConvex().install();
+      fake.addProject({ name: NAME, teamId: TEAM });
+      yield* stack.deploy(project({ team: TEAM, slug: NAME }).pipe(adopt(true)));
+      const error = yield* Effect.flip(stack.deploy(project({ team: OTHER_TEAM, slug: NAME })));
+      expect(error).toBeInstanceOf(Convex.ProjectTeamChange);
+    }),
+  );
+
   test.provider("fails with ProjectNotFound for a slug that no project has", (stack) =>
     Effect.gen(function* () {
       const fake = new FakeConvex().install();

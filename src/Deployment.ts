@@ -64,6 +64,7 @@ import {
 } from "./ManagementApi.ts";
 import type { Providers } from "./Providers.ts";
 import {
+  checkSource,
   EnvironmentNeedsDeployKey,
   type EnvValue,
   keyTargetOf,
@@ -201,6 +202,8 @@ export const DeploymentRow = Schema.Struct({
   /** Set in list_deployments and create_deployment rows only: GET /deployments/{name} answers null. */
   previewIdentifier: Schema.optionalKey(Schema.NullOr(Schema.String)),
   deploymentUrl: Schema.String.check(Schema.isPattern(CLOUD_URL)),
+  /** Absent or null until the first push: list_deployments leaves it out for a new deployment. */
+  lastDeployTime: Schema.optionalKey(Schema.NullOr(Schema.Number)),
 });
 type DeploymentRow = typeof DeploymentRow.Type;
 const DeploymentRows = Schema.Array(DeploymentRow);
@@ -232,6 +235,10 @@ const targetOf = (
   url: row.deploymentUrl,
   siteUrl: siteUrlOf(row.deploymentUrl),
 });
+
+/** True when the deployment has received a push. */
+const isDeployed = (row: DeploymentRow) =>
+  row.lastDeployTime !== undefined && row.lastDeployTime !== null;
 
 /** The `name` prop of a deployment: the dev reference or the preview name. */
 const nameOf = (target: DeploymentTarget) =>
@@ -278,6 +285,14 @@ const addressOf = (props: DeploymentProps): Address => ({
   type: props.type,
   name: props.type === "prod" ? undefined : props.name,
 });
+
+/** True when an update writes or removes variables: `env` has names, or state has names to remove. */
+const changesEnv = (news: DeploymentProps, output: DeploymentAttributes | undefined) =>
+  Object.keys(news.env ?? {}).length > 0 || envNamesOf(output).length > 0;
+
+/** The `env` names in state. State from 0.3 has none. */
+const envNamesOf = (output: DeploymentAttributes | undefined): readonly string[] =>
+  output?.envNames ?? [];
 
 /** The address of the deployment in state. */
 const addressInState = (output: DeploymentAttributes): Address => ({
@@ -357,15 +372,18 @@ export const DeploymentProvider = () =>
           )
           .pipe(Effect.map((body) => Schema.decodeUnknownSync(DeploymentRows)(body)));
 
+      /** The row of the project's default production deployment, or undefined. */
+      const productionRow = (management: ManagementApiService, projectId: number) =>
+        listDeployments(management, projectId, "prod", true).pipe(
+          Effect.map((rows) =>
+            rows.find((candidate) => candidate.deploymentType === "prod" && candidate.isDefault),
+          ),
+        );
+
       /** The project's default production deployment, or undefined. */
       const production = (management: ManagementApiService, projectId: number) =>
-        listDeployments(management, projectId, "prod", true).pipe(
-          Effect.map((rows) => {
-            const row = rows.find(
-              (candidate) => candidate.deploymentType === "prod" && candidate.isDefault,
-            );
-            return row === undefined ? undefined : targetOf(row, "prod", undefined);
-          }),
+        productionRow(management, projectId).pipe(
+          Effect.map((row) => (row === undefined ? undefined : targetOf(row, "prod", undefined))),
         );
 
       /**
@@ -459,8 +477,12 @@ export const DeploymentProvider = () =>
             Effect.catchIf(isRefused, () => Effect.succeed(false)),
           );
 
-      /** The narrowest credential that reaches the deployment. See {@link Access}. */
-      const accessFor = (address: Address) =>
+      /**
+       * The narrowest credential that reaches the deployment. See {@link Access}.
+       * When `changesEnv`, a preview deploy key gives way to the access token,
+       * because it cannot change variables.
+       */
+      const accessFor = (address: Address, changesEnv: boolean) =>
         Effect.gen(function* (): Effect.fn.Return<Access, ConvexApiError> {
           const key = yield* credentials.deployKey;
           if (key !== undefined) {
@@ -471,7 +493,10 @@ export const DeploymentProvider = () =>
             }
             if (target.kind === "preview" && address.type === "preview") {
               const scoped = api.withToken(key);
-              if (yield* previewKeyFits(scoped, target, address.projectId)) {
+              if (
+                !(changesEnv && (yield* credentials.hasAccessToken)) &&
+                (yield* previewKeyFits(scoped, target, address.projectId))
+              ) {
                 return { kind: "previewKey", key, api: scoped };
               }
             }
@@ -507,7 +532,7 @@ export const DeploymentProvider = () =>
         diff: Effect.fn(function* ({ news, output }) {
           if (!isResolved(news) || output === undefined) return undefined;
           yield* checkIdentity(output, news);
-          const access = yield* accessFor(addressOf(news));
+          const access = yield* accessFor(addressOf(news), changesEnv(news, output));
           // A preview expires, anyone can delete a deployment, and another
           // production deployment can become the default. Reconcile then
           // finds or creates the right one, so the stack never hands out the
@@ -522,41 +547,76 @@ export const DeploymentProvider = () =>
 
         read: Effect.fn(function* ({ olds, output }) {
           if (output !== undefined) {
-            const access = yield* accessFor(addressInState(output));
+            const access = yield* accessFor(addressInState(output), false);
             const current = yield* live(access, output);
             return current === undefined ? undefined : { ...output, ...current };
           }
           const address = addressOf(olds);
-          const access = yield* accessFor(address);
-          const found =
-            access.kind === "deployKey" ? access.target : yield* lookup(access.api, address);
+          const access = yield* accessFor(address, false);
+          if (access.kind === "deployKey") {
+            // The deployment API does not say whether the deployment has code.
+            return Unowned({ ...access.target, hash: undefined, envNames: [] });
+          }
+          if (olds.type === "prod") {
+            const row = yield* productionRow(access.api, address.projectId);
+            if (row === undefined) return undefined;
+            const attributes = {
+              ...targetOf(row, "prod", undefined),
+              hash: undefined,
+              envNames: [],
+            };
+            // A production deployment that never received a push, such as
+            // the one of a project that this stack created, loses nothing to
+            // a push. One with code is someone else's until --adopt.
+            return isDeployed(row) ? Unowned(attributes) : attributes;
+          }
+          const found = yield* lookup(access.api, address);
           if (found === undefined) return undefined;
-          const attributes: DeploymentAttributes = { ...found, hash: undefined, envNames: [] };
-          // The production deployment comes with the project, and this
-          // resource never changes or deletes it, so it is ours to read.
           // A dev or preview deployment that is not in state is someone
           // else's until the user passes --adopt.
-          return olds.type === "prod" ? attributes : Unowned(attributes);
+          return Unowned({ ...found, hash: undefined, envNames: [] });
         }),
 
         reconcile: Effect.fn(function* ({ fqn, news, output }) {
           // Also here: with an unresolved prop in plan, diff could not check.
           if (output !== undefined) yield* checkIdentity(output, news);
+          // The functions directory and the program, before any change.
+          if (news.source !== undefined) yield* checkSource(news.source);
           const address = addressOf(news);
-          const access = yield* accessFor(address);
+          const access = yield* accessFor(address, changesEnv(news, output));
           const env = news.env ?? {};
+          // Before any create: a preview deploy key cannot change variables,
+          // and accessFor chose it because there is no access token.
+          if (access.kind === "previewKey" && changesEnv(news, output)) {
+            return yield* new EnvironmentNeedsDeployKey({
+              deployment: output?.name ?? address.name ?? "(new)",
+            });
+          }
+          const adopt = yield* shouldAdopt(fqn);
+          const refuse = (name: string) =>
+            new OwnedBySomeoneElse({
+              message: `Project ${address.projectId} already has ${news.type} deployment ${name}${news.type === "prod" ? " with code" : ` named "${news.name}"`}. Re-run with --adopt to take it over${news.type === "prod" ? "" : ", or use another name"}.`,
+              resourceType: Deployment.Type,
+              physicalName: name,
+            });
 
-          // 1. The deployment.
-          const target: DeploymentTarget = yield* Effect.gen(function* () {
-            if (access.kind === "deployKey") return access.target;
+          // 1. The deployment. `created` is true when this reconcile created it.
+          const { target, created } = yield* Effect.gen(function* () {
+            if (access.kind === "deployKey") {
+              // read() refused it without --adopt; this covers an apply without a plan.
+              if (output === undefined && !adopt) return yield* refuse(access.target.name);
+              return { target: access.target, created: false };
+            }
             if (news.type === "prod") {
               // Always the current default, also when another production
               // deployment became the default after the last deploy.
-              const current = yield* production(access.api, address.projectId);
-              if (current === undefined) {
+              const row = yield* productionRow(access.api, address.projectId);
+              if (row === undefined) {
                 return yield* new ProductionDeploymentNotFound({ projectId: address.projectId });
               }
-              return current;
+              // Code that appeared after the plan is someone else's.
+              if (output === undefined && isDeployed(row) && !adopt) return yield* refuse(row.name);
+              return { target: targetOf(row, "prod", undefined), created: false };
             }
             if (output !== undefined) {
               const row = yield* getByName(access.api, output.name);
@@ -572,7 +632,7 @@ export const DeploymentProvider = () =>
                 const current = targetOf(row, output.type, output.previewName);
                 // The live deployment can have moved to another project.
                 yield* checkIdentity(current, news);
-                return current;
+                return { target: current, created: false };
               }
               // The deployment in state is gone, such as an expired preview.
               // Find or create it below like a resource without state.
@@ -582,34 +642,31 @@ export const DeploymentProvider = () =>
             // writer can still create one between this lookup and the create.
             const existing = yield* lookup(access.api, address);
             if (existing !== undefined) {
-              if (!(yield* shouldAdopt(fqn))) {
-                return yield* new OwnedBySomeoneElse({
-                  message: `Project ${address.projectId} already has ${news.type} deployment ${existing.name} named "${news.name}". Re-run with --adopt to take it over, or use another name.`,
-                  resourceType: Deployment.Type,
-                  physicalName: existing.name,
-                });
-              }
-              return existing;
+              if (!adopt) return yield* refuse(existing.name);
+              return { target: existing, created: false };
             }
-            const created = yield* access.api.request("create deployment", (client) =>
+            const row = yield* access.api.request("create deployment", (client) =>
               client.POST("/projects/{project_id}/create_deployment", {
                 params: { path: { project_id: address.projectId } },
                 body: { type: news.type, reference: news.name },
               }),
             );
-            return targetOf(Schema.decodeUnknownSync(DeploymentRow)(created), news.type, news.name);
+            return {
+              target: targetOf(Schema.decodeUnknownSync(DeploymentRow)(row), news.type, news.name),
+              created: true,
+            };
           });
 
           // 2. The variables and the push, only when their content changed.
           // Variables set on another deployment stay there: they are not ours
           // on this one.
-          const previousEnvNames = output?.name === target.name ? output.envNames : [];
+          const previousEnvNames = output?.name === target.name ? envNamesOf(output) : [];
           const before = yield* wantedHash(news, target.name);
           if (before === undefined && previousEnvNames.length === 0) {
             return { ...target, hash: undefined, envNames: [] };
           }
           if (output?.name === target.name && before === output.hash) {
-            return { ...target, hash: output.hash, envNames: output.envNames };
+            return { ...target, hash: output.hash, envNames: previousEnvNames };
           }
           const options = {
             deployment: target.name,
@@ -617,27 +674,41 @@ export const DeploymentProvider = () =>
             source: news.source,
             env,
             previousEnvNames,
-            adopt: yield* shouldAdopt(fqn),
+            adopt,
           };
-          switch (access.kind) {
-            case "deployKey":
-              yield* push(spawner, access.key, { ...options, previewName: undefined });
-              break;
-            case "previewKey":
-              if (Object.keys(env).length > 0 || previousEnvNames.length > 0) {
-                return yield* new EnvironmentNeedsDeployKey({ deployment: target.name });
-              }
-              yield* push(spawner, access.key, { ...options, previewName: target.previewName });
-              break;
-            case "token":
-              yield* withPushKey(access.api, target.name, news.source, (key) =>
-                push(spawner, key, { ...options, previewName: undefined }),
-              );
-              break;
-            default:
-              return access satisfies never;
-          }
-          // Taken again after the push, so that files the CLI generates,
+          const pushed =
+            access.kind === "deployKey"
+              ? push(spawner, access.key, { ...options, previewName: undefined })
+              : access.kind === "previewKey"
+                ? push(spawner, access.key, { ...options, previewName: target.previewName })
+                : withPushKey(access.api, target.name, news.source, (key) =>
+                    push(spawner, key, { ...options, previewName: undefined }),
+                  );
+          yield* pushed.pipe(
+            // A deployment that this reconcile created and could not push to
+            // would be someone else's on the next run, and a dev deployment
+            // never expires. It is new and empty, so it goes.
+            Effect.onError(() =>
+              created && access.kind !== "deployKey"
+                ? absentAsUndefined(
+                    retryIdempotentWrite(
+                      access.api.requestVoid("delete deployment", (client) =>
+                        client.POST("/deployments/{deployment_name}/delete", {
+                          params: { path: { deployment_name: target.name } },
+                        }),
+                      ),
+                    ),
+                  ).pipe(
+                    Effect.catch((error) =>
+                      Effect.logWarning(
+                        `Convex.Deployment could not delete ${target.name} after the failed push (${error.message}). The next run takes it over only with --adopt.`,
+                      ),
+                    ),
+                  )
+                : Effect.void,
+            ),
+          );
+          // Taken again after the push, so that files the push generates,
           // such as convex/_generated, are part of the identity.
           return {
             ...target,
@@ -653,7 +724,7 @@ export const DeploymentProvider = () =>
             `Convex.Deployment does not delete production deployment ${output.name}: it belongs to project ${output.projectId}. To delete it, delete the project with RemovalPolicy.destroy() on Convex.Project.`,
           );
           if (output.type === "prod") return yield* keep;
-          const access = yield* accessFor(addressInState(output));
+          const access = yield* accessFor(addressInState(output), false);
           // A deploy key cannot delete its deployment.
           const management = access.kind === "deployKey" ? api : access.api;
           // The type in state can be old: a dev or preview deployment can

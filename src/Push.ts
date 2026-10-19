@@ -64,16 +64,18 @@ export type Source =
        */
       readonly command?: readonly [string, ...string[]];
       /**
-       * More files for the content identity, as globs relative to the app
-       * directory, such as the build inputs `["src/**", "vite.config.ts"]`.
+       * The files of the content identity, as globs relative to the app
+       * directory, next to `path`, package.json, convex.json, and the
+       * lockfile, such as the build inputs `["src/**", "vite.config.ts"]`.
+       * By default, every file of the app that git does not ignore.
        */
       readonly include?: readonly string[];
     };
 
 const sourceOf = (source: Source) =>
   typeof source === "string"
-    ? { path: source, command: undefined, include: [] }
-    : { path: source.path, command: source.command, include: source.include ?? [] };
+    ? { path: source, command: undefined, include: undefined }
+    : { path: source.path, command: source.command, include: source.include };
 
 /** Lifetime of a push key. Long enough for a slow push with index backfills. */
 export const PUSH_KEY_LIFETIME_MS = 2 * 60 * 60 * 1000;
@@ -236,6 +238,34 @@ const appDirectoryOf = (source: string) =>
     catch: () => new ConvexAppNotFound({ source }),
   });
 
+/** `source` is not the functions directory that the Convex CLI pushes from this app. */
+export class SourceMismatch extends Schema.TaggedError<SourceMismatch>()("SourceMismatch", {
+  source: Schema.String,
+  functions: Schema.String,
+}) {
+  override get message() {
+    return `Convex.Deployment source is ${this.source}, but the Convex CLI pushes ${this.functions} in this app (the "functions" field of convex.json, or convex/ by default). Set source to ${this.functions}.`;
+  }
+}
+
+const ConvexJson = Schema.Struct({ functions: Schema.optionalKey(Schema.String) });
+
+/** Fails with {@link SourceMismatch} when `path` is not the functions directory of the app in `cwd`. */
+const checkFunctionsDirectory = (cwd: string, path: string) =>
+  Effect.gen(function* () {
+    const text = yield* Effect.promise(() =>
+      readFile(join(cwd, "convex.json"), "utf8").catch(() => undefined),
+    );
+    const configured =
+      text === undefined
+        ? undefined
+        : Schema.decodeUnknownSync(Schema.fromJsonString(ConvexJson))(text).functions;
+    const functions = resolve(cwd, configured ?? "convex");
+    if (functions !== resolve(path)) {
+      return yield* new SourceMismatch({ source: resolve(path), functions });
+    }
+  });
+
 const CliManifest = Schema.Struct({
   bin: Schema.Union([Schema.String, Schema.Record(Schema.String, Schema.String)]),
 });
@@ -256,10 +286,10 @@ const installedCli = (cwd: string) =>
   });
 
 /**
- * The content identity of a push: the files of `source`, the app's
- * package.json and convex.json, the `include` globs, the nearest lockfile,
- * the target deployment, and the `env` names and values. Gitignored files are left out. A change in
- * a workspace package outside the app directory is not seen.
+ * The content identity of a push: the files of the app directory that git
+ * does not ignore (or `path`, the manifests, and the `include` globs), the
+ * nearest lockfile, the target deployment, and the `env` names and values.
+ * A change in a workspace package outside the app directory is not seen.
  */
 export const pushHash = (options: {
   readonly source: Source | undefined;
@@ -275,15 +305,22 @@ export const pushHash = (options: {
             Effect.flatMap((cwd) =>
               hashDirectory({
                 cwd,
-                memo: {
-                  include: [
-                    `${relative(cwd, resolve(source.path)).split("\\").join("/")}/**`,
-                    "package.json",
-                    "convex.json",
-                    ...source.include,
-                  ],
-                  lockfile: true,
-                },
+                // By default every file of the app that git does not ignore,
+                // such as a module outside `source` that a function imports.
+                // `include` narrows it to the functions, the manifests, and
+                // the listed globs.
+                memo:
+                  source.include === undefined
+                    ? {}
+                    : {
+                        include: [
+                          `${relative(cwd, resolve(source.path)).split("\\").join("/")}/**`,
+                          "package.json",
+                          "convex.json",
+                          ...source.include,
+                        ],
+                        lockfile: true,
+                      },
               }),
             ),
           );
@@ -419,6 +456,20 @@ export interface PushOptions {
 }
 
 /**
+ * The app directory and the program of a push. Fails before any change when
+ * `source` is not the functions directory of the app, or when the app has no
+ * installed Convex CLI and no push command.
+ */
+export const checkSource = (input: Source) =>
+  Effect.gen(function* () {
+    const source = sourceOf(input);
+    const cwd = yield* appDirectoryOf(source.path);
+    yield* checkFunctionsDirectory(cwd, source.path);
+    const program = source.command ?? (yield* installedCli(cwd));
+    return { cwd, program };
+  });
+
+/**
  * Sets the `env` variables and pushes the functions of `source` to one
  * deployment with `key`: a deploy key of the deployment, or a preview deploy
  * key of its project with `previewName`. Returns the URL that the CLI
@@ -430,49 +481,101 @@ export const push = (
   options: PushOptions,
 ) =>
   Effect.gen(function* () {
-    // The program must exist before any variable changes.
     const source = options.source === undefined ? undefined : sourceOf(options.source);
-    const cwd = source === undefined ? undefined : yield* appDirectoryOf(source.path);
-    const program =
-      source === undefined || cwd === undefined
-        ? undefined
-        : (source.command ?? (yield* installedCli(cwd)));
+    const resolved = options.source === undefined ? undefined : yield* checkSource(options.source);
+    const cwd = resolved?.cwd;
+    const program = resolved?.program;
     const env = Object.entries(options.env).sort(([a], [b]) => (a < b ? -1 : 1));
     const removed = options.previousEnvNames.filter((name) => !Object.hasOwn(options.env, name));
 
     // 1. Variables before the push, so the push sees them. Each attempt
-    // checks first, so a retry after a write conflict never overwrites a
-    // value that another writer set in the meantime.
-    if (env.length > 0 || removed.length > 0) {
-      const fresh = env.filter(([name]) => !options.previousEnvNames.includes(name));
-      yield* retryIdempotentWrite(
-        Effect.gen(function* () {
-          if (fresh.length > 0 && !options.adopt) {
-            const current = yield* listVariables(options.url, key);
-            // The same value loses nothing, such as a value that an earlier
-            // run set before its push failed.
-            const taken = fresh
-              .filter(
-                ([name, value]) => Object.hasOwn(current, name) && current[name] !== valueOf(value),
-              )
-              .map(([name]) => name);
-            if (taken.length > 0) {
-              return yield* new VariablesOwnedBySomeoneElse({
-                deployment: options.deployment,
-                names: taken,
-              });
-            }
-          }
-          yield* writeVariables(options.url, key, [
-            ...env.map(([name, value]) => ({ name, value: valueOf(value) })),
-            ...removed.map((name) => ({ name, value: null })),
-          ]);
-        }),
-      );
-    }
+    // reads the current values first, so a retry after a write conflict never
+    // overwrites a value that another writer set in the meantime. Only
+    // changed values are written, and the earlier ones are kept for a
+    // rollback.
+    const written =
+      env.length === 0 && removed.length === 0
+        ? { current: {}, changes: [] }
+        : yield* retryIdempotentWrite(
+            Effect.gen(function* () {
+              const current = yield* listVariables(options.url, key);
+              if (!options.adopt) {
+                // The same value loses nothing, such as a value that an
+                // earlier run set before its push failed.
+                const taken = env
+                  .filter(
+                    ([name, value]) =>
+                      !options.previousEnvNames.includes(name) &&
+                      Object.hasOwn(current, name) &&
+                      current[name] !== valueOf(value),
+                  )
+                  .map(([name]) => name);
+                if (taken.length > 0) {
+                  return yield* new VariablesOwnedBySomeoneElse({
+                    deployment: options.deployment,
+                    names: taken,
+                  });
+                }
+              }
+              const changes = [
+                ...env
+                  .filter(([name, value]) => current[name] !== valueOf(value))
+                  .map(([name, value]) => ({ name, value: valueOf(value) })),
+                ...removed
+                  .filter((name) => Object.hasOwn(current, name))
+                  .map((name) => ({ name, value: null })),
+              ];
+              if (changes.length > 0) yield* writeVariables(options.url, key, changes);
+              return { current, changes };
+            }),
+          );
+
+    /**
+     * After a failed push, the variables go back to their earlier values, so
+     * that the deployment matches the hash in state. A failed rollback is
+     * logged: the push error is the one to report.
+     */
+    const rollback =
+      written.changes.length === 0
+        ? Effect.void
+        : retryIdempotentWrite(
+            writeVariables(
+              options.url,
+              key,
+              written.changes.map(({ name }) => ({
+                name,
+                value: Object.hasOwn(written.current, name)
+                  ? (written.current[name] ?? null)
+                  : null,
+              })),
+            ),
+          ).pipe(
+            Effect.catch((error) =>
+              Effect.logWarning(
+                `Convex.Deployment could not set the env variables of ${options.deployment} back after the failed push (${error.message}). Run the deploy again.`,
+              ),
+            ),
+          );
 
     // 2. The push, with the key only in the env file.
     if (source === undefined || cwd === undefined || program === undefined) return undefined;
+    return yield* runPush(spawner, key, { ...options, cwd, program, command: source.command }).pipe(
+      Effect.onError(() => rollback),
+    );
+  });
+
+/** Runs the installed CLI or the push command once, and checks the deployment that it names. */
+const runPush = (
+  spawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
+  key: Redacted.Redacted<string>,
+  options: PushOptions & {
+    readonly cwd: string;
+    readonly program: readonly [string, ...string[]];
+    readonly command: readonly [string, ...string[]] | undefined;
+  },
+) =>
+  Effect.gen(function* () {
+    const { cwd, program } = options;
     const secret = Redacted.value(key);
     const secrets = [secret, secret.slice(secret.indexOf("|") + 1)].filter(
       (value) => value.length >= 8,
@@ -483,7 +586,7 @@ export const push = (
         // The installed CLI reads the key from the env file. A push command
         // gets it as CONVEX_DEPLOY_KEY, which the CLI that it runs reads.
         const args =
-          source.command === undefined
+          options.command === undefined
             ? [
                 ...programArgs,
                 "deploy",
@@ -499,7 +602,7 @@ export const push = (
             cwd,
             env: {
               ...cliEnvironment(home),
-              ...(source.command === undefined ? {} : { CONVEX_DEPLOY_KEY: secret }),
+              ...(options.command === undefined ? {} : { CONVEX_DEPLOY_KEY: secret }),
             },
             extendEnv: false,
             stdin: "ignore",

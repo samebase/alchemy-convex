@@ -24,6 +24,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
 export interface ResolvedCredentials {
@@ -36,6 +37,8 @@ export interface ResolvedCredentials {
 export interface CredentialsService {
   /** The Management API token. Dies when there is none. */
   readonly accessToken: Effect.Effect<ResolvedCredentials>;
+  /** True when there is a Management API token. */
+  readonly hasAccessToken: Effect.Effect<boolean>;
   /** A deploy key or a preview deploy key, or undefined. */
   readonly deployKey: Effect.Effect<Redacted.Redacted<string> | undefined>;
 }
@@ -92,11 +95,11 @@ export const fromConfig = (): Layer.Layer<Credentials> =>
   Layer.effect(
     Credentials,
     Effect.gen(function* () {
-      const accessToken = yield* Effect.cached(
+      const resolved = yield* Effect.cached(
         Config.Redacted(ACCESS_TOKEN_ENV).pipe(
           Effect.map((token): ResolvedCredentials => ({ accessToken: token, source: "env" })),
           Effect.catch(() => readConvexCliLogin),
-          Effect.orDie,
+          Effect.result,
         ),
       );
       const deployKey = yield* Effect.cached(
@@ -105,7 +108,11 @@ export const fromConfig = (): Layer.Layer<Credentials> =>
           Effect.orDie,
         ),
       );
-      return { accessToken, deployKey };
+      return {
+        accessToken: resolved.pipe(Effect.flatMap(Effect.fromResult), Effect.orDie),
+        hasAccessToken: resolved.pipe(Effect.map(Result.isSuccess)),
+        deployKey,
+      };
     }),
   );
 
@@ -124,5 +131,6 @@ export const fromValues = (values: {
             }),
           )
         : Effect.succeed({ accessToken: values.accessToken, source: "explicit" } as const),
+    hasAccessToken: Effect.succeed(values.accessToken !== undefined),
     deployKey: Effect.succeed(values.deployKey),
   });

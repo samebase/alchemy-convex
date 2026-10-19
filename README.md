@@ -60,7 +60,8 @@ export default Alchemy.Stack(
 The imports are `alchemy`, `alchemy/Cloudflare`, `alchemy/RemovalPolicy`, `effect/Config`,
 `effect/Effect`, `effect/Layer`, and `@samebase/alchemy-convex` as `Convex`. Order follows the
 outputs: the project exists before its deployment, and the push finishes before the site build. The
-first `alchemy deploy --stage prod` takes over the existing project only with `--adopt`.
+first `alchemy deploy --stage prod` takes over the existing project, and its production
+deployment if it has code, only with `--adopt`.
 `alchemy destroy --stage pr-42` deletes the preview deployment. Without `RemovalPolicy.destroy()`,
 it stays until Convex deletes it at expiry (14 days by default).
 [`examples/app/alchemy.run.ts`](examples/app/alchemy.run.ts) is the same stack.
@@ -79,9 +80,9 @@ reads them through the stack's config provider (process env, `.env`, stack secre
     `Convex.Project.ref`. The key must have `deployment:data:view` (dashboard keys have all
     actions), because the provider reads the project and type of its deployment first.
   - A preview deploy key of a project (`preview:<team>:<project>|...`) creates, pushes to, and
-    deletes preview deployments of that project. It cannot change variables, so `env` on such a
-    preview fails with `EnvironmentNeedsDeployKey`. Use project default variables in the Convex
-    dashboard for previews.
+    deletes preview deployments of that project. It cannot change variables: with `env`, the
+    provider uses the access token, and without one it stops with `EnvironmentNeedsDeployKey`
+    before it creates anything. Use project default variables in the Convex dashboard for previews.
 
 A key that does not fit the deployment is not used: the provider uses the access token. To pass
 values explicitly: `Convex.providers(Convex.fromValues({ accessToken, deployKey }))`.
@@ -97,25 +98,27 @@ values explicitly: `Convex.providers(Convex.fromValues({ accessToken, deployKey 
   each with optional `source` and `env`. Outputs `name` (such as `happy-animal-123`), `url`,
   `siteUrl`, `type`, `projectId`, `reference`, `previewName`, `hash`, and `envNames`.
   - `prod` is the project's default production deployment (with a deploy key: the key's
-    production deployment). The resource never creates or deletes one.
+    production deployment). The resource never creates or deletes one. A production deployment
+    with code that is not in state is taken over only with `--adopt`.
   - `dev` creates a dev deployment with `name` as its reference; `preview` creates a preview
     deployment with `name` as its preview name. An expired preview is created again on the next
     deploy.
-  - `source` is the Convex functions directory. The CLI runs in the nearest directory above it
-    with a package.json, with the Node.js that runs Alchemy, and is never downloaded
-    (`ConvexCliNotFound`).
-  - The content identity is a hash of the `source` files, package.json, convex.json, the nearest
-    lockfile, the deployment name, and `env`. Gitignored files are left out. The same hash is a
-    no-op. Otherwise the update sets `env`, then pushes.
+  - `source` is the Convex functions directory: `convex/`, or the `functions` field of
+    convex.json (`SourceMismatch`). The CLI runs in the nearest directory above it with a
+    package.json, with the Node.js that runs Alchemy, and is never downloaded (`ConvexCliNotFound`).
+  - The content identity is a hash of every file of that app directory that git does not ignore,
+    the nearest lockfile, the deployment name, and `env`. The same hash is a no-op. Otherwise the
+    update sets `env`, then pushes. A failed push sets the changed variables back, and deletes a
+    dev or preview deployment that the same run created.
   - `env` values are strings or secrets such as `Config.Redacted("AUTH_SECRET")`. A name that
     leaves `env` is removed from the deployment.
   - `source: { path, command?, include? }` replaces `convex deploy` with `command`, run in the app
     directory with the push key in `CONVEX_DEPLOY_KEY`, such as
     `["node_modules/.bin/convex-hosting", "deploy", "--build", "node_modules/.bin/vp build", "--dist", "dist/client"]`.
     The command must push with `convex deploy` (convex-hosting does, through `--cmd`). `include`
-    adds the build inputs to the hash, such as `["src/**", "public/**", "vite.config.ts"]`; build
-    outputs such as `dist` stay out. A minted key for a command has every action, because the
-    command can do more than a push.
+    narrows the hash to `path`, package.json, convex.json, the lockfile, and the listed globs, such
+    as the build inputs `["src/**", "public/**", "vite.config.ts"]`. A minted key for a command
+    has every action, because the command can do more than a push.
 
 ## Data safety
 
@@ -148,7 +151,7 @@ values explicitly: `Convex.providers(Convex.fromValues({ accessToken, deployKey 
 - `env` values are props, so Alchemy state holds them. Keep `.alchemy/` git-ignored, and use an
   encrypted state store, such as `Cloudflare.state()`, in CI.
 - The hash does not see a change in a workspace package outside the app directory, or a push from
-  outside Alchemy. Change a file in `source` to push again.
+  outside Alchemy. Change a file of the app to push again.
 - With a deploy key, the provider reaches the deployment at `https://<name>.convex.cloud`, so the
   deployment must answer there.
 - A run that stops between a deployment create and the state write leaves a deployment that state
