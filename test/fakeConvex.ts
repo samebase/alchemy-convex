@@ -4,7 +4,6 @@
 // (https://<deployment>.convex.cloud/api/v1). Every response body is a
 // recorded payload from fixtures/management with only the fields that a
 // scenario needs changed.
-import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import * as Schema from "effect/Schema";
 import { vi } from "vitest";
@@ -15,9 +14,6 @@ export const fixture = (file: string): unknown =>
 const Fields = Schema.Record(Schema.String, Schema.Unknown);
 /** A recorded object payload as a plain record, so a scenario can derive a changed copy. */
 export const recorded = (file: string) => Schema.decodeUnknownSync(Fields)(fixture(file));
-const [recordedKeyRow] = Schema.decodeUnknownSync(Schema.Tuple([Fields]))(
-  fixture("deployment_list_deploy_keys.json"),
-);
 const [recordedDeploymentRow] = Schema.decodeUnknownSync(Schema.Tuple([Fields]))(
   fixture("project_list_deployments.json"),
 );
@@ -32,6 +28,8 @@ export interface Sent {
   readonly path: string;
   readonly query: URLSearchParams;
   readonly body: unknown;
+  /** The Authorization header. Tests use fake values only. */
+  readonly authorization: string;
 }
 
 interface Key {
@@ -46,7 +44,6 @@ const Changes = Schema.Struct({
     Schema.Struct({
       name: Schema.String,
       value: Schema.optionalKey(Schema.NullOr(Schema.String)),
-      deploymentType: Schema.optionalKey(Schema.String),
     }),
   ),
 });
@@ -78,8 +75,6 @@ export class FakeConvex {
   readonly projects: Record<string, unknown>[] = [];
   /** Deploy keys for each deployment name. */
   readonly keys = new Map<string, Key[]>();
-  /** Preview deploy keys for each project id. */
-  readonly previewKeys = new Map<number, Key[]>();
   /** Environment variables for each deployment name. */
   readonly variables = new Map<string, Record<string, string>>();
   /**
@@ -87,8 +82,6 @@ export class FakeConvex {
    * addProject adds the project's default production deployment.
    */
   readonly deployments: Record<string, unknown>[] = [];
-  /** Project default environment variables. */
-  readonly defaults: { projectId: number; name: string; deploymentType: string }[] = [];
   /**
    * Answers sent before the normal handler, for "METHOD host/path" keys,
    * such as a recorded write conflict. Each answer is used once.
@@ -211,14 +204,15 @@ export class FakeConvex {
     const text = await request.text();
     const body = Schema.decodeUnknownSync(RequestBody)(text === "" ? undefined : JSON.parse(text));
     const path = `${url.host}${url.pathname}`;
-    this.sent.push({ method: request.method, path, query: url.searchParams, body });
+    const authorization = request.headers.get("Authorization") ?? "";
+    this.sent.push({ method: request.method, path, query: url.searchParams, body, authorization });
     const next = this.scripted.get(`${request.method} ${path}`)?.shift();
     if (next !== undefined) {
       // A change that another writer makes while this request runs.
       next.meanwhile?.();
       return json(next.status, next.body);
     }
-    return this.route(request.method, url, body, request.headers.get("Authorization") ?? "");
+    return this.route(request.method, url, body, authorization);
   };
 
   private route(
@@ -230,6 +224,9 @@ export class FakeConvex {
     const deploymentHost = /^([a-z0-9-]+)\.convex\.cloud$/.exec(url.host);
     if (deploymentHost !== null) {
       const deployment = deploymentHost[1] ?? "";
+      if (authorization.startsWith("Convex preview:")) {
+        return json(403, { code: "Unauthorized", message: "Not authorized" });
+      }
       const key = this.deploymentKeys.get(deployment);
       if (key !== undefined && authorization !== `Convex ${key}`) {
         return json(401, {
@@ -244,6 +241,18 @@ export class FakeConvex {
     const route = `${method} ${url.pathname.replace(/\/\d+(?=\/|$)/g, "/{id}")}`;
     const id = Number(/\/(\d+)(?:\/|$)/.exec(url.pathname)?.[1]);
     const deployment = /^\/v1\/deployments\/([^/]+)\//.exec(url.pathname)?.[1] ?? "";
+    const bySlug = /^\/v1\/teams\/([^/]+)\/projects\/([^/]+)$/.exec(url.pathname);
+    if (method === "GET" && bySlug !== null) {
+      const [, team, slug] = bySlug;
+      const row = this.projects.find(
+        (candidate) =>
+          candidate["slug"] === slug &&
+          (String(candidate["teamId"]) === team || candidate["teamSlug"] === team),
+      );
+      return row === undefined
+        ? json(404, recorded("team_get_project_by_slug_not_found.json"))
+        : json(200, { ...recorded("team_get_project_by_slug.json"), ...row });
+    }
     switch (route) {
       case "GET /v1/teams/{id}/projects":
         return this.listProjects(id, url.searchParams);
@@ -306,101 +315,41 @@ export class FakeConvex {
             previewIdentifier: null,
           });
     }
-    // Keys and project defaults: /v1/deployments/{name}/<route> and /v1/projects/{id}/<route>.
-    const keyRoute = /^\/v1\/(?:deployments\/[^/]+|projects\/\d+)\/(\w+)$/.exec(url.pathname)?.[1];
-    const keys = url.pathname.startsWith("/v1/deployments/")
-      ? this.keysOf(this.keys, deployment)
-      : this.keysOf(this.previewKeys, id);
+    // Deploy keys and deletes: /v1/deployments/{name}/<route>.
+    const keyRoute = /^\/v1\/deployments\/[^/]+\/(\w+)$/.exec(url.pathname)?.[1];
+    const keys = this.keysOf(this.keys, deployment);
     switch (`${method} ${keyRoute}`) {
-      case "POST create_deploy_key":
-      case "POST create_preview_deploy_key": {
-        if (this.oauth) {
-          const secret = `${recordedSecret.slice(0, recordedSecret.indexOf("|"))}|${bearer}`;
-          return json(
-            200,
-            keyRoute === "create_deploy_key"
-              ? { ...recorded("deployment_create_deploy_key.json"), deployKey: secret }
-              : { previewDeployKey: secret },
-          );
+      case "POST create_deploy_key": {
+        if (bearer.startsWith("preview:")) {
+          return json(403, recorded("deployment_create_deploy_key_preview_key_refused.json"));
         }
-        const name = String(body?.["name"]);
+        if (this.oauth) {
+          const prefix = recordedSecret.slice(0, recordedSecret.indexOf("|"));
+          const secret = `${prefix.replace("beaming-okapi-932", deployment)}|${bearer}`;
+          return json(200, { ...recorded("deployment_create_deploy_key.json"), deployKey: secret });
+        }
         const key = {
           id: this.nextId++,
-          // Convex lists a key under the requested name, and adds a suffix when the name is taken.
-          name: keys.some((other) => other.name === name) ? `${name} (${randomUUID()})` : name,
-          // The recorded secret with this key's target in the prefix, as
-          // Convex makes them: `dev:<deployment>|...` and `preview:<team>:<project>|...`.
-          secret:
-            keyRoute === "create_deploy_key"
-              ? `${recordedSecret.replace("beaming-okapi-932", deployment)}-${this.nextId}`
-              : `preview:nicu:${this.project(id)?.name}${recordedSecret.slice(recordedSecret.indexOf("|"))}-${this.nextId}`,
+          name: String(body?.["name"]),
+          // The recorded secret with this key's deployment in the prefix, as
+          // Convex makes them: `dev:<deployment>|...`.
+          secret: `${recordedSecret.replace("beaming-okapi-932", deployment)}-${this.nextId}`,
         };
         keys.push(key);
-        return json(
-          200,
-          keyRoute === "create_deploy_key"
-            ? { ...recorded("deployment_create_deploy_key.json"), deployKey: key.secret }
-            : { previewDeployKey: key.secret },
-        );
-      }
-      case "GET list_deploy_keys":
-        return json(200, this.keyRows(keys));
-      case "GET list_preview_deploy_keys":
         return json(200, {
-          ...recorded("project_list_preview_deploy_keys.json"),
-          items: this.keyRows(keys),
+          ...recorded("deployment_create_deploy_key.json"),
+          deployKey: key.secret,
         });
+      }
       case "POST delete": {
         if (this.deployment(deployment) === undefined) return this.deploymentNotFound(deployment);
         this.removeDeployment(deployment);
         return empty();
       }
-      case "POST delete_deploy_key":
-      case "POST delete_preview_deploy_key": {
-        const index = keys.findIndex(
-          (key) => key.secret === body?.["id"] || key.name === body?.["id"],
-        );
-        if (index === -1) {
-          return notFound(
-            keyRoute === "delete_deploy_key" ? "DeployKeyNotFound" : "PreviewDeployKeyNotFound",
-          );
-        }
+      case "POST delete_deploy_key": {
+        const index = keys.findIndex((key) => key.secret === body?.["id"]);
+        if (index === -1) return notFound("DeployKeyNotFound");
         keys.splice(index, 1);
-        return empty();
-      }
-      case "GET list_default_environment_variables":
-        return json(200, {
-          ...recorded("project_list_default_environment_variables.json"),
-          items: this.defaults
-            .filter(
-              (row) =>
-                row.projectId === id &&
-                row.name === url.searchParams.get("name") &&
-                row.deploymentType === url.searchParams.get("deploymentType"),
-            )
-            .map((row) => ({
-              name: row.name,
-              value: "REDACTED",
-              deploymentTypes: [row.deploymentType],
-            })),
-        });
-      case "POST update_default_environment_variables": {
-        for (const change of Schema.decodeUnknownSync(Changes)(body).changes) {
-          const index = this.defaults.findIndex(
-            (row) =>
-              row.projectId === id &&
-              row.name === change.name &&
-              row.deploymentType === change.deploymentType,
-          );
-          if (index !== -1) this.defaults.splice(index, 1);
-          if (change.value !== null && change.value !== undefined) {
-            this.defaults.push({
-              projectId: id,
-              name: change.name,
-              deploymentType: change.deploymentType ?? "",
-            });
-          }
-        }
         return empty();
       }
       default:
@@ -421,6 +370,23 @@ export class FakeConvex {
         return json(200, {
           ...recorded("deployment_list_environment_variables.json"),
           environmentVariables: variables,
+        });
+      case "GET /api/v1/deployment_info": {
+        const row = this.deployment(deployment);
+        return row === undefined
+          ? this.deploymentNotFound(deployment)
+          : json(200, {
+              ...recorded("deployment_info.json"),
+              projectId: row.projectId,
+              deploymentType: row.deploymentType,
+              reference: row.reference,
+            });
+      }
+      case "GET /api/v1/get_canonical_urls":
+        return json(200, {
+          ...recorded("deployment_get_canonical_urls.json"),
+          convexCloudUrl: `https://${deployment}.convex.cloud`,
+          convexSiteUrl: `https://${deployment}.convex.site`,
         });
       case "POST /api/v1/update_environment_variables":
         for (const change of Schema.decodeUnknownSync(Changes)(body).changes) {
@@ -495,13 +461,9 @@ export class FakeConvex {
     });
   }
 
-  private keysOf<K>(store: Map<K, Key[]>, owner: K) {
+  private keysOf(store: Map<string, Key[]>, owner: string) {
     const keys = store.get(owner) ?? [];
     store.set(owner, keys);
     return keys;
-  }
-
-  private keyRows(keys: readonly Key[]) {
-    return keys.map((key) => ({ ...recordedKeyRow, id: key.id, name: key.name }));
   }
 }

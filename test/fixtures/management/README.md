@@ -13,9 +13,6 @@ files. Negative-case fixtures are derived by mutating these, never written from 
 | deployment.json | GET /deployments/{deployment_name} |
 | team_list_deployment_regions.json | GET /teams/{team_id}/list_deployment_regions |
 | deployment_create_deploy_key.json | POST /deployments/{deployment_name}/create_deploy_key |
-| deployment_list_deploy_keys.json | GET /deployments/{deployment_name}/list_deploy_keys |
-| project_list_preview_deploy_keys.json | GET /projects/{project_id}/list_preview_deploy_keys |
-| project_list_default_environment_variables.json | GET /projects/{project_id}/list_default_environment_variables |
 | deployment_list_environment_variables.json | GET https://{deployment}.convex.cloud/api/v1/list_environment_variables |
 | team_create_project.json | POST /teams/{team_id}/create_project |
 | project_update.json | PATCH /projects/{project_id} |
@@ -29,6 +26,12 @@ files. Negative-case fixtures are derived by mutating these, never written from 
 | project_list_deployments_all.json | GET /projects/{project_id}/list_deployments, with prod, dev, and preview rows |
 | deployment_get_preview.json | GET /deployments/{deployment_name} for a preview deployment |
 | deployment_not_found.json | POST /deployments/{deployment_name}/delete for a deleted deployment (404) |
+| team_get_project_by_slug.json | GET /teams/{team_id_or_slug}/projects/{project_slug} |
+| team_get_project_by_slug_not_found.json | GET /teams/{team_id_or_slug}/projects/{project_slug} for a missing slug (404) |
+| deployment_info.json | GET https://{deployment}.convex.cloud/api/v1/deployment_info with a full-access deploy key |
+| deployment_info_not_permitted.json | the same with a key that has only `deployment:deploy` (403) |
+| deployment_get_canonical_urls.json | GET https://{deployment}.convex.cloud/api/v1/get_canonical_urls |
+| deployment_create_deploy_key_preview_key_refused.json | POST /deployments/{deployment_name}/create_deploy_key with a preview deploy key (403) |
 
 The files from `team_create_project.json` down were captured on 2026-10-06 by
 `test/live/safety.live.test.ts` against a temporary project `tmp-alchemy-convex-<8 hex>` in team
@@ -57,3 +60,10 @@ with the secret as `id` delete exactly that key, and a second delete answers 404
 `update_environment_variables` calls on one deployment can answer 503
 `OptimisticConcurrencyControlFailure`, and two parallel `delete_preview_deploy_key` calls on one
 project can answer 500 `InternalServerError`. A new attempt succeeds.
+
+The files from `team_get_project_by_slug.json` down were captured on 2026-10-20 against temporary
+projects `tmp-ea1d03a3-record` and `tmp-ea1d03a3-record2` in team `nicu`, deleted after the run.
+Facts learned then: a production deploy key gets `UnexpectedAuthHeaderFormat` (400) on the
+Management API, and its `deployment_info` needs `deployment:data:view`; a preview deploy key reads
+its project and creates, gets, and deletes its preview deployments on the Management API, but cannot
+create a deploy key or use the deployment API.

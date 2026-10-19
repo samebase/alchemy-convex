@@ -1,5 +1,7 @@
-// A stand-in for the Convex CLI in the Convex.Code unit tests, which run it
-// through the `command` prop: `node fake-convex-cli.ts deploy ... --env-file <path>`.
+// A stand-in for the Convex CLI in the Convex.Deployment push tests. The tests
+// install it as the `convex` bin of a fake `convex` package in a temporary
+// app, so the provider resolves it like the real CLI:
+// `node fake-convex-cli.ts deploy [--preview-name <name>] --env-file <path>`.
 // It appends one JSON line per run to ALCHEMY_CONVEX_FAKE_CLI_LOG and acts by
 // ALCHEMY_CONVEX_FAKE_CLI_MODE:
 // - "ok": prints the line of a finished push, like convex 1.46. The deployment

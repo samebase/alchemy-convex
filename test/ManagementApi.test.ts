@@ -4,7 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
-import { fromToken } from "../src/Credentials.ts";
+import { fromValues } from "../src/Credentials.ts";
 import {
   ConvexApiError,
   isRetryableWriteError,
@@ -77,7 +77,9 @@ describe("isCredentialToken", () => {
         return yield* api.isCredentialToken(secret);
       }).pipe(
         Effect.provide(
-          ManagementApiLive().pipe(Layer.provide(fromToken(Redacted.make(accessToken)))),
+          ManagementApiLive().pipe(
+            Layer.provide(fromValues({ accessToken: Redacted.make(accessToken) })),
+          ),
         ),
       ),
     );
