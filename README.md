@@ -109,6 +109,13 @@ values explicitly: `Convex.providers(Convex.fromValues({ accessToken, deployKey 
     no-op. Otherwise the update sets `env`, then pushes.
   - `env` values are strings or secrets such as `Config.Redacted("AUTH_SECRET")`. A name that
     leaves `env` is removed from the deployment.
+  - `source: { path, command?, include? }` replaces `convex deploy` with `command`, run in the app
+    directory with the push key in `CONVEX_DEPLOY_KEY`, such as
+    `["node_modules/.bin/convex-hosting", "deploy", "--build", "node_modules/.bin/vp build", "--dist", "dist/client"]`.
+    The command must push with `convex deploy` (convex-hosting does, through `--cmd`). `include`
+    adds the build inputs to the hash, such as `["src/**", "public/**", "vite.config.ts"]`; build
+    outputs such as `dist` stay out. A minted key for a command has every action, because the
+    command can do more than a push.
 
 ## Data safety
 

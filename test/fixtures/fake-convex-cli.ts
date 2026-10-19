@@ -15,8 +15,12 @@ import { createHash } from "node:crypto";
 import { appendFileSync, readFileSync, statSync } from "node:fs";
 
 const args = process.argv.slice(2);
-const envFile = args[args.indexOf("--env-file") + 1] ?? "";
-const key = /^CONVEX_DEPLOY_KEY=(.*)$/m.exec(readFileSync(envFile, "utf8"))?.[1] ?? "";
+// The key comes from `--env-file`, or, run as a push command, from CONVEX_DEPLOY_KEY.
+const envFile = args.includes("--env-file") ? (args[args.indexOf("--env-file") + 1] ?? "") : "";
+const key =
+  envFile === ""
+    ? (process.env["CONVEX_DEPLOY_KEY"] ?? "")
+    : (/^CONVEX_DEPLOY_KEY=(.*)$/m.exec(readFileSync(envFile, "utf8"))?.[1] ?? "");
 const mode = process.env["ALCHEMY_CONVEX_FAKE_CLI_MODE"] ?? "ok";
 const previewName = args.includes("--preview-name")
   ? args[args.indexOf("--preview-name") + 1]
@@ -31,10 +35,12 @@ appendFileSync(
   `${JSON.stringify({
     args,
     envFile,
-    envFileMode: (statSync(envFile).mode & 0o777).toString(8),
+    envFileMode: envFile === "" ? "" : (statSync(envFile).mode & 0o777).toString(8),
     keySha256: createHash("sha256").update(key).digest("hex"),
     home: process.env["HOME"],
-    convexVariables: Object.keys(process.env).filter((name) => name.startsWith("CONVEX_")),
+    convexVariables: Object.keys(process.env)
+      .filter((name) => name.startsWith("CONVEX_"))
+      .sort(),
     cwd: process.cwd(),
   })}\n`,
 );

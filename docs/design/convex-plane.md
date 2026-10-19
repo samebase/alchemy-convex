@@ -1,14 +1,11 @@
 # Design: the Convex plane
 
-Status: implemented on branch `nicu-convex-plane`. Sources: Confect issue
-[#408](https://github.com/rjdellecese/confect/issues/408) ("Convex Plain"), the prototype
+Sources: Confect [#408](https://github.com/rjdellecese/confect/issues/408) ("Convex Plain"),
 [rjdellecese/confect#735](https://github.com/rjdellecese/confect/pull/735) (head `9a3eab2`), and
 `alchemy@2.0.0-beta.80` (Worker, Neon, `Command.Build`).
 
-## Problem
-
-Version 0.3 is shaped for Workers Builds: key resources hand keys to a build outside Alchemy, `Code`
-takes a key from another resource and pushes on every apply, and env lives in three resources.
+Problem: version 0.3 is shaped for Workers Builds. Key resources hand keys to a build outside
+Alchemy, `Code` takes a key from another resource and pushes on every apply.
 
 ## Decision: adopt the 408 model, keep our implementation, do not vendor or depend
 
@@ -20,8 +17,8 @@ takes a key from another resource and pushes on every apply, and env lives in th
   Alchemy state through internal APIs (`internal/Lifecycle.ts`), and pins beta.82 and TypeScript 7.
   Our code already has the safety rules that 735 lacks: a production deployment is never created or
   deleted, previews are looked up before a create, and retries handle OCC answers.
-- Not a dependency: `@confect/alchemy` is an open PR in the Confect monorepo, and its only Convex
-  plain addition over ours is `Confect.Backend` (codegen before the push).
+- Not a dependency: `@confect/alchemy` is an open PR in the Confect monorepo; its only addition
+  over ours is `Confect.Backend` (codegen before the push).
 - Kept from 735, with credit in NOTICE: the adoption check order and the CLI runner (an env file
   with mode 0600 in a temporary home directory, the installed `convex` bin, no download).
 
@@ -43,13 +40,16 @@ takes a key from another resource and pushes on every apply, and env lives in th
   a deploy key or change variables. So a deploy key pushes to its own deployment with no token, and
   a preview deploy key runs preview stages with no token and no `env`. The token is needed only to
   create a project or a deployment that a key cannot reach.
-- `Project` takes `{ team, slug }` for an existing project (official `GET /teams/{team}/projects/{slug}`)
-  next to `{ team, name }` for one it creates. Both need `--adopt` for an object not in state.
+- `Project` takes `{ team, slug }` (official `GET /teams/{team}/projects/{slug}`) next to
+  `{ team, name }`. Both need `--adopt` for an object not in state.
 - Kept invariants: never replace or delete a deployment on an input change (identity errors), retain
   by default, never delete production, ids from state and not URLs, all pages of a listing, OCC
   retries, never revoke a credential that an app runs on (the only key deleted is the push key).
 - `env` stays on the deployment and is not a resource: the push needs it first, and destroy does not
   remove variables, so required variables (Convex Auth keys) never block a destroy.
+- `source: { path, command, include }` runs a push command such as `convex-hosting deploy --build`
+  with the key in `CONVEX_DEPLOY_KEY`; `include` adds build inputs to the hash. Proven on a copy of
+  the convex-hosting tanstack-spa example: deploy and serve, no-op, a changed route redeploys.
 - Removed: `Code`, `Deploy`, `DeployKey`, `PreviewDeployKey`, `EnvironmentVariable`,
   `DefaultEnvironmentVariable`.
 

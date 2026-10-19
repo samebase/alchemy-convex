@@ -36,5 +36,6 @@ export {
   type EnvValue,
   parseDeployOutput,
   PushTargetMismatch,
+  type Source,
   VariablesOwnedBySomeoneElse,
 } from "./Push.ts";

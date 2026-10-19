@@ -3,8 +3,9 @@
 //
 // - The key is created for one push with the Management API credential and
 //   deleted after it, also after a failure. It can only deploy and read and
-//   write variables, and it expires after PUSH_KEY_LIFETIME_MS, so a run
-//   that stops before the delete leaves no key that works for long. No key
+//   write variables (with a push command: every action), and it expires
+//   after PUSH_KEY_LIFETIME_MS, so a run that stops before the delete leaves
+//   no key that works for long. No key
 //   goes into state, into an output, or to another resource.
 // - With an OAuth token as the credential, Convex creates no new key: it
 //   returns the OAuth token with a new prefix. The push uses it, and the
@@ -44,6 +45,35 @@ import {
 
 /** A value of the `env` prop: a string, or a secret such as `Config.Redacted("AUTH_SECRET")`. */
 export type EnvValue = string | Redacted.Redacted<string>;
+
+/**
+ * The `source` prop: the Convex functions directory, such as `./convex`, or
+ * that directory with a push command and more files for the content identity.
+ */
+export type Source =
+  | string
+  | {
+      /** The Convex functions directory, such as `./convex`. */
+      readonly path: string;
+      /**
+       * Replaces `convex deploy`: a program and its arguments, run in the app
+       * directory with CONVEX_DEPLOY_KEY in its environment, such as
+       * `["pnpm", "exec", "convex-hosting", "deploy", "--build", "pnpm run build", "--dist", "dist"]`.
+       * It must push with `convex deploy`, such as through `--cmd`, so that
+       * its output has the CLI's "Deployed Convex functions to" line.
+       */
+      readonly command?: readonly [string, ...string[]];
+      /**
+       * More files for the content identity, as globs relative to the app
+       * directory, such as the build inputs `["src/**", "vite.config.ts"]`.
+       */
+      readonly include?: readonly string[];
+    };
+
+const sourceOf = (source: Source) =>
+  typeof source === "string"
+    ? { path: source, command: undefined, include: [] }
+    : { path: source.path, command: source.command, include: source.include ?? [] };
 
 /** Lifetime of a push key. Long enough for a slow push with index backfills. */
 export const PUSH_KEY_LIFETIME_MS = 2 * 60 * 60 * 1000;
@@ -227,29 +257,30 @@ const installedCli = (cwd: string) =>
 
 /**
  * The content identity of a push: the files of `source`, the app's
- * package.json and convex.json, the nearest lockfile, the target deployment,
- * and the `env` names and values. Gitignored files are left out. A change in
+ * package.json and convex.json, the `include` globs, the nearest lockfile,
+ * the target deployment, and the `env` names and values. Gitignored files are left out. A change in
  * a workspace package outside the app directory is not seen.
  */
 export const pushHash = (options: {
-  readonly source: string | undefined;
+  readonly source: Source | undefined;
   readonly deployment: string;
   readonly env: Readonly<Record<string, EnvValue>>;
 }) =>
   Effect.gen(function* () {
-    const source = options.source;
+    const source = options.source === undefined ? undefined : sourceOf(options.source);
     const files =
       source === undefined
         ? undefined
-        : yield* appDirectoryOf(source).pipe(
+        : yield* appDirectoryOf(source.path).pipe(
             Effect.flatMap((cwd) =>
               hashDirectory({
                 cwd,
                 memo: {
                   include: [
-                    `${relative(cwd, resolve(source)).split("\\").join("/")}/**`,
+                    `${relative(cwd, resolve(source.path)).split("\\").join("/")}/**`,
                     "package.json",
                     "convex.json",
+                    ...source.include,
                   ],
                   lockfile: true,
                 },
@@ -294,12 +325,14 @@ const cliEnvironment = (home: string): Record<string, string | undefined> => ({
 
 /**
  * Creates a deploy key for one push, runs `use` with it, and deletes it
- * afterwards. The delete is skipped for a key that is the OAuth credential.
+ * afterwards. Without a push command, the key can only deploy and read and
+ * write variables. The delete is skipped for a key that is the OAuth credential.
  * A failed delete is logged: the key expires anyway.
  */
 export const withPushKey = <A, E, R>(
   api: ManagementApiService,
   deployment: string,
+  source: Source | undefined,
   use: (key: Redacted.Redacted<string>) => Effect.Effect<A, E, R>,
 ) =>
   Effect.acquireUseRelease(
@@ -310,7 +343,11 @@ export const withPushKey = <A, E, R>(
           params: { path: { deployment_name: deployment } },
           body: {
             name: "alchemy-push",
-            allowedActions: [...PUSH_KEY_ACTIONS],
+            // A push command can do more than a push, such as the uploads of
+            // convex-hosting through `convex run`, so its key has every action.
+            ...(source === undefined || sourceOf(source).command === undefined
+              ? { allowedActions: [...PUSH_KEY_ACTIONS] }
+              : {}),
             expiresAt: now + PUSH_KEY_LIFETIME_MS,
           },
         }),
@@ -367,8 +404,8 @@ export interface PushOptions {
   readonly deployment: string;
   /** Client URL of the deployment. */
   readonly url: string;
-  /** The functions directory, such as `./convex`. Without it, only the variables change. */
-  readonly source: string | undefined;
+  /** The functions directory, or it with a push command. Without it, only the variables change. */
+  readonly source: Source | undefined;
   readonly env: Readonly<Record<string, EnvValue>>;
   /** Names that an earlier push set on this deployment. Names that left `env` are removed. */
   readonly previousEnvNames: readonly string[];
@@ -393,15 +430,13 @@ export const push = (
   options: PushOptions,
 ) =>
   Effect.gen(function* () {
-    // The CLI must exist before any variable changes.
-    const cli =
-      options.source === undefined
+    // The program must exist before any variable changes.
+    const source = options.source === undefined ? undefined : sourceOf(options.source);
+    const cwd = source === undefined ? undefined : yield* appDirectoryOf(source.path);
+    const program =
+      source === undefined || cwd === undefined
         ? undefined
-        : yield* appDirectoryOf(options.source).pipe(
-            Effect.flatMap((cwd) =>
-              installedCli(cwd).pipe(Effect.map((program) => ({ cwd, program }))),
-            ),
-          );
+        : (source.command ?? (yield* installedCli(cwd)));
     const env = Object.entries(options.env).sort(([a], [b]) => (a < b ? -1 : 1));
     const removed = options.previousEnvNames.filter((name) => !Object.hasOwn(options.env, name));
 
@@ -437,23 +472,35 @@ export const push = (
     }
 
     // 2. The push, with the key only in the env file.
-    if (cli === undefined) return undefined;
-    const { cwd, program } = cli;
+    if (source === undefined || cwd === undefined || program === undefined) return undefined;
     const secret = Redacted.value(key);
     const secrets = [secret, secret.slice(secret.indexOf("|") + 1)].filter(
       (value) => value.length >= 8,
     );
-    const args = [
-      "deploy",
-      ...(options.previewName === undefined ? [] : ["--preview-name", options.previewName]),
-    ];
     const result = yield* withKeyFile(secret, ({ envFile, home }) =>
       Effect.gen(function* () {
         const [command, ...programArgs] = program;
+        // The installed CLI reads the key from the env file. A push command
+        // gets it as CONVEX_DEPLOY_KEY, which the CLI that it runs reads.
+        const args =
+          source.command === undefined
+            ? [
+                ...programArgs,
+                "deploy",
+                ...(options.previewName === undefined
+                  ? []
+                  : ["--preview-name", options.previewName]),
+                "--env-file",
+                envFile,
+              ]
+            : programArgs;
         const child = yield* spawner.spawn(
-          ChildProcess.make(command, [...programArgs, ...args, "--env-file", envFile], {
+          ChildProcess.make(command, args, {
             cwd,
-            env: cliEnvironment(home),
+            env: {
+              ...cliEnvironment(home),
+              ...(source.command === undefined ? {} : { CONVEX_DEPLOY_KEY: secret }),
+            },
             extendEnv: false,
             stdin: "ignore",
             stdout: "pipe",

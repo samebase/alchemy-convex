@@ -277,6 +277,41 @@ describe("Convex.Deployment push with the access token", () => {
       }),
   );
 
+  withToken.test.provider(
+    "runs a push command with the key in its environment, and hashes its include globs",
+    (stack) =>
+      Effect.gen(function* () {
+        const fake = new FakeConvex().install();
+        const projectId = fake.addProject({ name: NAME, teamId: TEAM });
+        mkdirSync(join(app, "src"));
+        writeFileSync(join(app, "src", "main.ts"), "export const page = 1;\n");
+        const props = {
+          project: { projectId },
+          type: "prod",
+          source: {
+            path: join(app, "convex"),
+            command: [process.execPath, FAKE_CLI, "deploy", "--cmd", "build"],
+            include: ["src/**"],
+          },
+        } as const;
+        const first = yield* stack.deploy(backend(props, undefined));
+        const [run] = runs();
+        expect(run?.args).toEqual(["deploy", "--cmd", "build"]);
+        expect(run?.cwd).toBe(realpathSync(app));
+        expect(run?.convexVariables).toEqual(["CONVEX_DEPLOY_KEY"]);
+        const [, remove] = keyCalls(fake);
+        const RemoveBody = Schema.Struct({ id: Schema.String });
+        expect(sha256(Schema.decodeUnknownSync(RemoveBody)(remove?.body).id)).toBe(run?.keySha256);
+        // Unchanged: a no-op. A changed build input: a new push.
+        yield* stack.deploy(backend(props, undefined));
+        expect(runs()).toHaveLength(1);
+        writeFileSync(join(app, "src", "main.ts"), "export const page = 2;\n");
+        const third = yield* stack.deploy(backend(props, undefined));
+        expect(third.hash).not.toBe(first.hash);
+        expect(runs()).toHaveLength(2);
+      }),
+  );
+
   withToken.test.provider("fails with PushTargetMismatch when the CLI pushed elsewhere", (stack) =>
     Effect.gen(function* () {
       const fake = new FakeConvex().install();

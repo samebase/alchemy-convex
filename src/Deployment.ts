@@ -8,6 +8,8 @@
 //   app's package.json, convex.json, and lockfile, the deployment name, and
 //   `env`. The same hash is a no-op. The hash is taken again after the push,
 //   so files that `convex deploy` generates are part of it.
+//   `source.command` replaces `convex deploy`, such as `convex-hosting
+//   deploy`, and `source.include` adds the files that it reads to the hash.
 // - `env` is set on the deployment before the push. A name that leaves `env`
 //   is removed. A variable that exists with another value and that this
 //   resource did not set is someone else's: it is overwritten only with
@@ -67,6 +69,7 @@ import {
   keyTargetOf,
   push,
   pushHash,
+  type Source,
   withPushKey,
 } from "./Push.ts";
 
@@ -74,11 +77,12 @@ interface DeploymentInputs {
   /** The project: a Convex.Project resource, or `{ projectId }`. Cannot change. */
   readonly project: { readonly projectId: number };
   /**
-   * The Convex functions directory, such as `./convex`. The CLI runs in the
-   * nearest directory above it with a package.json. Without `source`, the
-   * resource pushes nothing.
+   * The Convex functions directory, such as `./convex`, or that directory
+   * with a push command and more hashed files. The push runs in the nearest
+   * directory above it with a package.json. Without `source`, the resource
+   * pushes nothing.
    */
-  readonly source?: string;
+  readonly source?: Source;
   /** Environment variables to set on the deployment before the push. */
   readonly env?: Readonly<Record<string, EnvValue>>;
 }
@@ -626,7 +630,7 @@ export const DeploymentProvider = () =>
               yield* push(spawner, access.key, { ...options, previewName: target.previewName });
               break;
             case "token":
-              yield* withPushKey(access.api, target.name, (key) =>
+              yield* withPushKey(access.api, target.name, news.source, (key) =>
                 push(spawner, key, { ...options, previewName: undefined }),
               );
               break;
