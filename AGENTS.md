@@ -7,6 +7,8 @@
 
 - This package manages only the Convex plane: projects, deployments, their environment variables,
   and the push of the functions inside `Convex.Deployment`. See `docs/design/convex-plane.md`.
+- `Convex.state()` keeps Alchemy state in the `alchemyState` component (`src/component/`). Convex
+  codegen writes `src/component/_generated/`. See `docs/design/convex-state.md`.
 - The Convex CLI owns typecheck, codegen, bundling, and the code push. `Convex.Deployment` only runs
   the installed `convex deploy`. Do not move work of the Convex CLI into this package.
 - Credentials are a layer, never props. No deploy key goes from one resource to another, and the
@@ -22,7 +24,8 @@
 
 ## Tests
 
-- Unit tests read recorded real Management API payloads in `test/fixtures/management/`.
+- Unit tests read recorded real Management API payloads in `test/fixtures/management/`, and
+  recorded function API payloads in `test/fixtures/state/`.
 - Make a negative case from a changed recorded payload. Do not write a fixture from scratch.
 - Replace each secret value with `REDACTED`. Do not commit a token, a deploy key, or other secrets.
 - Live tests make real API calls. They run only with `ALCHEMY_CONVEX_LIVE=1` (`pnpm run test:live`).

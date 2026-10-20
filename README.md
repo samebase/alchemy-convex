@@ -90,6 +90,27 @@ reads them through the stack's config provider (process env, `.env`, stack secre
 A key that does not fit the deployment is not used: the provider uses the access token. To pass
 values explicitly: `Convex.providers(Convex.fromValues({ accessToken, deployKey }))`.
 
+## State in Convex
+
+`state: Convex.state()` keeps the Alchemy state of every stage in the production deployment of the
+project, so the stack needs no Cloudflare token.
+[docs/design/convex-state.md](docs/design/convex-state.md) records the decisions.
+
+1. Mount the state component in `convex/convex.config.ts` with its default name:
+
+   ```ts
+   import alchemyState from "@samebase/alchemy-convex/convex.config";
+   app.use(alchemyState);
+   ```
+
+2. Set `CONVEX_STATE_DEPLOY_KEY` in every run, a preview run too, to a production deploy key. A key
+   with only the actions `deployment:data:view` and `deployment:data:write` is sufficient.
+
+The first run starts with empty state, keeps it in memory until `Convex.Deployment` has pushed the
+component, and then writes it. A run whose push does not mount the component fails at the end.
+Rows are in the `alchemyState` component tables `resources` and `outputs` in the dashboard. The
+store has no lock: run one deploy of a stage at a time, such as with a CI concurrency group.
+
 ## Resources
 
 - `Convex.Project`: `{ team, name, deploymentRegion?, deploymentType? }` creates a project with its
