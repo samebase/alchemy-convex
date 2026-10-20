@@ -1,0 +1,4 @@
+{
+  "status": "success",
+  "value": "{\"status\":\"updated\",\"fqn\":\"Deployment\",\"logicalId\":\"Deployment\",\"instanceId\":\"9058feab6047cbbe014a3530ca68230f\",\"resourceType\":\"Convex.Deployment\",\"props\":{\"project\":{\"projectId\":3246004},\"type\":\"prod\",\"source\":\"./convex\"},\"attr\":{\"projectId\":3246004,\"type\":\"prod\",\"name\":\"fine-cow-747\",\"reference\":\"production\",\"url\":\"https://fine-cow-747.convex.cloud\",\"siteUrl\":\"https://fine-cow-747.convex.site\",\"hash\":\"455a3611512881a08a8054a39c7e59e12fed35aaf0ea0f45c6783469438e2b6f\",\"envNames\":[]},\"bindings\":[],\"providerVersion\":0,\"downstream\":[],\"removalPolicy\":\"retain\"}"
+}
