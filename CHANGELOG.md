@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased
+
+The Convex plane. `Convex.Deployment` now owns the push, so no deploy key goes from one resource to
+another and nothing is shaped for Workers Builds. Breaking: see the removed resources.
+
+- `Convex.Deployment` takes `project` (a `Convex.Project` or `{ projectId }`) in place of
+  `projectId`, and optional `source` and `env`. `source` is the Convex functions directory. The
+  update sets `env`, then runs the installed `convex deploy`. A hash of the source files,
+  package.json, convex.json, the lockfile, the deployment name, and `env` is the content identity:
+  the same hash is a no-op. New outputs: `hash` and `envNames`.
+- The hash covers every file of the app that git does not ignore. `source: { path, command,
+include }` runs a push command, such as `convex-hosting deploy --build ...`, with the key in
+  `CONVEX_DEPLOY_KEY`, and `include` narrows the hash. `source` must be the functions directory
+  of convex.json (`SourceMismatch`).
+- A failed push sets the changed variables back and deletes a dev or preview deployment that the
+  same run created. A production deployment with code that is not in state needs `--adopt`.
+- With the access token, each push uses a deploy key that expires after two hours and is deleted
+  after the push. With `CONVEX_DEPLOY_KEY`, a deploy key of the deployment or a preview deploy key
+  of the project pushes with no access token.
+- `Convex.Project` takes `{ team, slug }` for an existing project, found with the official
+  `GET /teams/{team}/projects/{slug}`. It never creates or renames that project.
+- Credentials: `fromValues({ accessToken?, deployKey? })` replaces `fromToken`. `fromConfig` also
+  reads `CONVEX_DEPLOY_KEY`.
+- Removed: `Convex.Code`, `Convex.Deploy`, `Convex.DeployKey`, `Convex.PreviewDeployKey`,
+  `Convex.EnvironmentVariable`, and `Convex.DefaultEnvironmentVariable`. This version has no
+  provider for them. Before you upgrade, remove them from the stack and deploy once with 0.3. That
+  deploy revokes the keys of removed key resources, so do it only after nothing uses those keys. To
+  keep a key or a variable, delete its state record with `alchemy state rm` instead. Then put
+  `source` and `env` on the `Convex.Deployment`.
+
 ## 0.3.0
 
 One Alchemy stack can now own a Convex app end to end: it creates the deployment, pushes the

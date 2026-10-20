@@ -18,7 +18,7 @@ const NAME = "tmp-alchemy-convex-fixture";
 const API = "api.convex.dev/v1";
 
 const { test } = Test.make({
-  providers: Convex.providers(Convex.fromToken(Redacted.make("test-token"))),
+  providers: Convex.providers(Convex.fromValues({ accessToken: Redacted.make("test-token") })),
 });
 
 const project = (props: Convex.ProjectProps) =>
@@ -289,6 +289,56 @@ describe("Convex.Project", () => {
         `GET ${API}/teams/${TEAM}/projects`,
         `GET ${API}/teams/${TEAM}/projects`,
       ]);
+    }),
+  );
+
+  test.provider(
+    "takes over an existing project by slug only with --adopt, and never changes it",
+    (stack) =>
+      Effect.gen(function* () {
+        const fake = new FakeConvex().install();
+        const projectId = fake.addProject({ name: NAME, teamId: TEAM });
+        const bySlug = { team: "samebase-live-tests", slug: NAME } as const;
+        const refused = yield* Effect.flip(stack.deploy(project(bySlug)));
+        expect(refused).toMatchObject({ _tag: "OwnedBySomeoneElse" });
+        const adopted = yield* stack.deploy(
+          Effect.gen(function* () {
+            const found = yield* Convex.Project("Project", bySlug).pipe(adopt(true));
+            return { projectId: found.projectId, name: found.name, slug: found.slug };
+          }),
+        );
+        expect(adopted).toEqual({ projectId, name: NAME, slug: NAME });
+        const from = fake.sent.length;
+        const again = yield* stack.deploy(project(bySlug));
+        expect(again).toEqual(adopted);
+        expect(fake.lines().filter((line) => !line.startsWith("GET "))).toEqual([]);
+        expect(fake.lines(from)).not.toContain(
+          `GET ${API}/teams/samebase-live-tests/projects/${NAME}`,
+        );
+        // The default policy keeps the project.
+        yield* stack.destroy();
+        expect(fake.project(projectId)).toBeDefined();
+      }),
+  );
+
+  test.provider("fails a team change of a slug project with ProjectTeamChange", (stack) =>
+    Effect.gen(function* () {
+      const fake = new FakeConvex().install();
+      fake.addProject({ name: NAME, teamId: TEAM });
+      yield* stack.deploy(project({ team: TEAM, slug: NAME }).pipe(adopt(true)));
+      const error = yield* Effect.flip(stack.deploy(project({ team: OTHER_TEAM, slug: NAME })));
+      expect(error).toBeInstanceOf(Convex.ProjectTeamChange);
+    }),
+  );
+
+  test.provider("fails with ProjectNotFound for a slug that no project has", (stack) =>
+    Effect.gen(function* () {
+      const fake = new FakeConvex().install();
+      const error = yield* Effect.flip(
+        stack.deploy(project({ team: TEAM, slug: "no-such-project" })).pipe(adopt(true)),
+      );
+      expect(error).toBeInstanceOf(Convex.ProjectNotFound);
+      expect(fake.lines().filter((line) => line.endsWith("/create_project"))).toEqual([]);
     }),
   );
 });

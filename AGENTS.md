@@ -5,11 +5,12 @@
 
 ## Ownership rule
 
-- This package manages only the Convex control plane: projects, deployments, deploy keys,
-  environment variables, project default environment variables, and the code push.
-- The Convex CLI owns typecheck, codegen, bundling, and the code push. `Convex.Code` only runs the
-  installed `convex deploy` (the deprecated `Convex.Deploy` runs `npx convex deploy`). Do not move
-  work of the Convex CLI into this package.
+- This package manages only the Convex plane: projects, deployments, their environment variables,
+  and the push of the functions inside `Convex.Deployment`. See `docs/design/convex-plane.md`.
+- The Convex CLI owns typecheck, codegen, bundling, and the code push. `Convex.Deployment` only runs
+  the installed `convex deploy`. Do not move work of the Convex CLI into this package.
+- Credentials are a layer, never props. No deploy key goes from one resource to another, and the
+  only key the provider deletes is the short-lived push key that it created.
 
 ## Commands
 

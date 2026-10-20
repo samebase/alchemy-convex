@@ -11,7 +11,7 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
-import { Credentials } from "./Credentials.ts";
+import { Credentials, type ResolvedCredentials } from "./Credentials.ts";
 
 export type ManagementClient = ReturnType<typeof createManagementClient>;
 export type DeploymentClient = ReturnType<typeof createDeploymentClient>;
@@ -79,6 +79,11 @@ export interface ManagementApiService {
    * that key would revoke the credential.
    */
   readonly isCredentialToken: (secret: string) => Effect.Effect<boolean>;
+  /**
+   * The same calls with another bearer token, such as a preview deploy key,
+   * which the Management API takes for the preview deployments of its project.
+   */
+  readonly withToken: (token: Redacted.Redacted<string>) => ManagementApiService;
 }
 
 /** The part of a Convex token after the first "|", or the whole value when it has none. */
@@ -174,76 +179,91 @@ export const absentAsUndefined = <A, R>(
 const TeamRow = Schema.Struct({ id: Schema.Number, slug: Schema.String });
 const TeamRows = Schema.Array(TeamRow);
 
+/** The service for one way to get the bearer token. */
+const makeService = (credentials: Effect.Effect<ResolvedCredentials>): ManagementApiService => {
+  const client = Effect.cached(
+    credentials.pipe(
+      Effect.map((resolved) => createManagementClient(Redacted.value(resolved.accessToken))),
+    ),
+  ).pipe(Effect.flatten);
+
+  const request: ManagementApiService["request"] = (operation, run) =>
+    client.pipe(Effect.flatMap((c) => settle(operation, () => run(c))));
+
+  const requestVoid: ManagementApiService["requestVoid"] = (operation, run) =>
+    client.pipe(Effect.flatMap((c) => settleVoid(operation, () => run(c))));
+
+  const deploymentRequest: ManagementApiService["deploymentRequest"] = (
+    operation,
+    deploymentUrlOrName,
+    deployKey,
+    run,
+  ) =>
+    settle(operation, () =>
+      run(createDeploymentClient(deploymentUrlOrName, Redacted.value(deployKey))),
+    );
+
+  // The Management API addresses teams by numeric id. The only slug lookup
+  // it offers is per project, so a slug falls back to the dashboard's team
+  // list, which is unofficial. Pass the numeric team id to skip this.
+  const resolveTeamId: ManagementApiService["resolveTeamId"] = (team) =>
+    Effect.gen(function* () {
+      if (typeof team === "number") return team;
+      if (/^\d+$/.test(team)) return Number(team);
+      const resolved = yield* credentials;
+      const rows = yield* Effect.tryPromise({
+        try: async () => {
+          const response = await fetch("https://api.convex.dev/api/dashboard/teams", {
+            headers: { Authorization: `Bearer ${Redacted.value(resolved.accessToken)}` },
+          });
+          if (!response.ok) {
+            throw new Error(`team lookup for "${team}" failed with HTTP ${response.status}`);
+          }
+          return Schema.decodeUnknownSync(TeamRows)(await response.json());
+        },
+        catch: (cause) =>
+          new ConvexApiError({
+            operation: "resolve team",
+            status: 0,
+            message: cause instanceof Error ? cause.message : String(cause),
+          }),
+      });
+      const match = rows.find((row) => row.slug === team);
+      if (match === undefined) {
+        return yield* new ConvexApiError({
+          operation: "resolve team",
+          status: 404,
+          message: `no team with slug "${team}" for this token`,
+        });
+      }
+      return match.id;
+    });
+
+  const isCredentialToken: ManagementApiService["isCredentialToken"] = (secret) =>
+    credentials.pipe(
+      Effect.map(
+        (resolved) => tokenPart(Redacted.value(resolved.accessToken)) === tokenPart(secret),
+      ),
+    );
+
+  const withToken: ManagementApiService["withToken"] = (token) =>
+    makeService(Effect.succeed({ accessToken: token, source: "explicit" }));
+
+  return {
+    request,
+    requestVoid,
+    deploymentRequest,
+    resolveTeamId,
+    isCredentialToken,
+    withToken,
+  };
+};
+
 export const ManagementApiLive = (): Layer.Layer<ManagementApi, never, Credentials> =>
   Layer.effect(
     ManagementApi,
     Effect.gen(function* () {
       const credentials = yield* Credentials;
-      const client = Effect.cached(
-        credentials.pipe(
-          Effect.map((resolved) => createManagementClient(Redacted.value(resolved.accessToken))),
-        ),
-      ).pipe(Effect.flatten);
-
-      const request: ManagementApiService["request"] = (operation, run) =>
-        client.pipe(Effect.flatMap((c) => settle(operation, () => run(c))));
-
-      const requestVoid: ManagementApiService["requestVoid"] = (operation, run) =>
-        client.pipe(Effect.flatMap((c) => settleVoid(operation, () => run(c))));
-
-      const deploymentRequest: ManagementApiService["deploymentRequest"] = (
-        operation,
-        deploymentUrlOrName,
-        deployKey,
-        run,
-      ) =>
-        settle(operation, () =>
-          run(createDeploymentClient(deploymentUrlOrName, Redacted.value(deployKey))),
-        );
-
-      // The Management API addresses teams by numeric id. The only slug lookup
-      // it offers is per project, so a slug falls back to the dashboard's team
-      // list, which is unofficial. Pass the numeric team id to skip this.
-      const resolveTeamId: ManagementApiService["resolveTeamId"] = (team) =>
-        Effect.gen(function* () {
-          if (typeof team === "number") return team;
-          if (/^\d+$/.test(team)) return Number(team);
-          const resolved = yield* credentials;
-          const rows = yield* Effect.tryPromise({
-            try: async () => {
-              const response = await fetch("https://api.convex.dev/api/dashboard/teams", {
-                headers: { Authorization: `Bearer ${Redacted.value(resolved.accessToken)}` },
-              });
-              if (!response.ok) {
-                throw new Error(`team lookup for "${team}" failed with HTTP ${response.status}`);
-              }
-              return Schema.decodeUnknownSync(TeamRows)(await response.json());
-            },
-            catch: (cause) =>
-              new ConvexApiError({
-                operation: "resolve team",
-                status: 0,
-                message: cause instanceof Error ? cause.message : String(cause),
-              }),
-          });
-          const match = rows.find((row) => row.slug === team);
-          if (match === undefined) {
-            return yield* new ConvexApiError({
-              operation: "resolve team",
-              status: 404,
-              message: `no team with slug "${team}" for this token`,
-            });
-          }
-          return match.id;
-        });
-
-      const isCredentialToken: ManagementApiService["isCredentialToken"] = (secret) =>
-        credentials.pipe(
-          Effect.map(
-            (resolved) => tokenPart(Redacted.value(resolved.accessToken)) === tokenPart(secret),
-          ),
-        );
-
-      return { request, requestVoid, deploymentRequest, resolveTeamId, isCredentialToken };
+      return makeService(credentials.accessToken);
     }),
   );

@@ -3,6 +3,7 @@
 import { adopt } from "alchemy/AdoptPolicy";
 import * as Provider from "alchemy/Provider";
 import * as RemovalPolicy from "alchemy/RemovalPolicy";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Test from "alchemy/Test/Vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -18,7 +19,7 @@ const NAME = "tmp-alchemy-convex-fixture";
 const API = "api.convex.dev/v1";
 
 const { test } = Test.make({
-  providers: Convex.providers(Convex.fromToken(Redacted.make("test-token"))),
+  providers: Convex.providers(Convex.fromValues({ accessToken: Redacted.make("test-token") })),
 });
 
 const attributes = (deployment: Convex.Deployment) => ({
@@ -48,10 +49,7 @@ describe("Convex.Deployment", () => {
       const out = yield* stack.deploy(
         Effect.gen(function* () {
           const project = yield* Convex.Project("Project", { team: TEAM, name: NAME });
-          const prod = yield* Convex.Deployment("Prod", {
-            projectId: project.projectId,
-            type: "prod",
-          });
+          const prod = yield* Convex.Deployment("Prod", { project, type: "prod" });
           return { projectId: project.projectId, prod: attributes(prod) };
         }),
       );
@@ -73,10 +71,24 @@ describe("Convex.Deployment", () => {
     Effect.gen(function* () {
       const fake = new FakeConvex().install();
       const projectId = fake.addProject({ name: NAME, teamId: TEAM });
-      const out = yield* stack.deploy(deployment({ projectId, type: "prod" }));
+      const out = yield* stack.deploy(deployment({ project: { projectId }, type: "prod" }));
       expect(out.name).toBe(fake.project(projectId)?.prodDeploymentName);
       // Reads only: the takeover changes nothing in Convex.
       expect(fake.lines().filter((line) => !line.startsWith("GET "))).toEqual([]);
+    }),
+  );
+
+  test.provider("takes over a production deployment with code only with --adopt", (stack) =>
+    Effect.gen(function* () {
+      const fake = new FakeConvex().install();
+      const projectId = fake.addProject({ name: NAME, teamId: TEAM });
+      const name = fake.project(projectId)?.prodDeploymentName ?? "";
+      fake.markDeployed(name);
+      const props = { project: { projectId }, type: "prod" } as const;
+      const refused = yield* Effect.flip(stack.deploy(deployment(props)));
+      expect(refused).toMatchObject({ _tag: "OwnedBySomeoneElse" });
+      const adopted = yield* stack.deploy(deployment(props).pipe(adopt(true)));
+      expect(adopted.name).toBe(name);
     }),
   );
 
@@ -85,7 +97,9 @@ describe("Convex.Deployment", () => {
       const fake = new FakeConvex().install();
       const projectId = fake.addProject({ name: NAME, teamId: TEAM });
       fake.deployments.length = 0;
-      const error = yield* Effect.flip(stack.deploy(deployment({ projectId, type: "prod" })));
+      const error = yield* Effect.flip(
+        stack.deploy(deployment({ project: { projectId }, type: "prod" })),
+      );
       expect(error).toBeInstanceOf(Convex.ProductionDeploymentNotFound);
       expect(error).toMatchObject({
         projectId,
@@ -98,7 +112,9 @@ describe("Convex.Deployment", () => {
     Effect.gen(function* () {
       const fake = new FakeConvex().install();
       const projectId = fake.addProject({ name: NAME, teamId: TEAM });
-      const out = yield* stack.deploy(deployment({ projectId, type: "preview", name: "pr-42" }));
+      const out = yield* stack.deploy(
+        deployment({ project: { projectId }, type: "preview", name: "pr-42" }),
+      );
       expect(out).toMatchObject({
         projectId,
         type: "preview",
@@ -117,7 +133,9 @@ describe("Convex.Deployment", () => {
     Effect.gen(function* () {
       const fake = new FakeConvex().install();
       const projectId = fake.addProject({ name: NAME, teamId: TEAM });
-      const out = yield* stack.deploy(deployment({ projectId, type: "dev", name: "staging" }));
+      const out = yield* stack.deploy(
+        deployment({ project: { projectId }, type: "dev", name: "staging" }),
+      );
       expect(out).toMatchObject({ type: "dev", reference: "staging", previewName: undefined });
       expect(fake.deployment(out.name)).toMatchObject({ deploymentType: "dev", isDefault: false });
     }),
@@ -127,9 +145,13 @@ describe("Convex.Deployment", () => {
     Effect.gen(function* () {
       const fake = new FakeConvex().install();
       const projectId = fake.addProject({ name: NAME, teamId: TEAM });
-      const first = yield* stack.deploy(deployment({ projectId, type: "preview", name: "pr-42" }));
+      const first = yield* stack.deploy(
+        deployment({ project: { projectId }, type: "preview", name: "pr-42" }),
+      );
       const from = fake.sent.length;
-      const second = yield* stack.deploy(deployment({ projectId, type: "preview", name: "pr-42" }));
+      const second = yield* stack.deploy(
+        deployment({ project: { projectId }, type: "preview", name: "pr-42" }),
+      );
       expect(second).toEqual(first);
       expect(fake.lines(from)).toEqual([`GET ${API}/deployments/${first.name}`]);
     }),
@@ -139,13 +161,17 @@ describe("Convex.Deployment", () => {
     Effect.gen(function* () {
       const fake = new FakeConvex().install();
       const projectId = fake.addProject({ name: NAME, teamId: TEAM });
-      const first = yield* stack.deploy(deployment({ projectId, type: "preview", name: "pr-42" }));
+      const first = yield* stack.deploy(
+        deployment({ project: { projectId }, type: "preview", name: "pr-42" }),
+      );
       // Convex deletes a preview deployment when it expires.
       fake.deployments.splice(
         fake.deployments.findIndex((row) => row["name"] === first.name),
         1,
       );
-      const second = yield* stack.deploy(deployment({ projectId, type: "preview", name: "pr-42" }));
+      const second = yield* stack.deploy(
+        deployment({ project: { projectId }, type: "preview", name: "pr-42" }),
+      );
       expect(second.name).not.toBe(first.name);
       expect(second.previewName).toBe("pr-42");
       expect(fake.deploymentsOf(projectId).map((row) => row.name)).toContain(second.name);
@@ -161,14 +187,14 @@ describe("Convex.Deployment", () => {
         // Such as a preview that `npx convex deploy --preview-name pr-42` created in CI.
         const existing = fake.addDeployment({ projectId, type: "preview", name: "pr-42" });
         const refused = yield* Effect.flip(
-          stack.deploy(deployment({ projectId, type: "preview", name: "pr-42" })),
+          stack.deploy(deployment({ project: { projectId }, type: "preview", name: "pr-42" })),
         );
         expect(refused).toMatchObject({ _tag: "OwnedBySomeoneElse" });
         const adopted = yield* stack.deploy(
           Effect.gen(function* () {
             return attributes(
               yield* Convex.Deployment("Deployment", {
-                projectId,
+                project: { projectId },
                 type: "preview",
                 name: "pr-42",
               }).pipe(adopt(true)),
@@ -186,7 +212,7 @@ describe("Convex.Deployment", () => {
       const fake = new FakeConvex().install();
       const projectId = fake.addProject({ name: NAME, teamId: TEAM });
       const created = yield* stack.deploy(
-        deployment({ projectId, type: "preview", name: "pr-42" }),
+        deployment({ project: { projectId }, type: "preview", name: "pr-42" }),
       );
       // The preview in state expires, and CI creates a new one with the same name.
       fake.deployments.splice(
@@ -195,7 +221,7 @@ describe("Convex.Deployment", () => {
       );
       const other = fake.addDeployment({ projectId, type: "preview", name: "pr-42" });
       const refused = yield* Effect.flip(
-        stack.deploy(deployment({ projectId, type: "preview", name: "pr-42" })),
+        stack.deploy(deployment({ project: { projectId }, type: "preview", name: "pr-42" })),
       );
       expect(refused).toMatchObject({
         _tag: "OwnedBySomeoneElse",
@@ -213,7 +239,7 @@ describe("Convex.Deployment", () => {
       const a = fake.addDeployment({ projectId, type: "preview", name: "pr-42" });
       const b = fake.addDeployment({ projectId, type: "preview", name: "pr-42" });
       const error = yield* Effect.flip(
-        stack.deploy(deployment({ projectId, type: "preview", name: "pr-42" })),
+        stack.deploy(deployment({ project: { projectId }, type: "preview", name: "pr-42" })),
       );
       expect(error).toBeInstanceOf(Convex.AmbiguousDeployment);
       expect(error).toMatchObject({ deployments: [a, b] });
@@ -224,10 +250,10 @@ describe("Convex.Deployment", () => {
     Effect.gen(function* () {
       const fake = new FakeConvex().install();
       const projectId = fake.addProject({ name: NAME, teamId: TEAM });
-      const first = yield* stack.deploy(deployment({ projectId, type: "prod" }));
+      const first = yield* stack.deploy(deployment({ project: { projectId }, type: "prod" }));
       const from = fake.sent.length;
       const error = yield* Effect.flip(
-        stack.deploy(deployment({ projectId, type: "preview", name: "pr-42" })),
+        stack.deploy(deployment({ project: { projectId }, type: "preview", name: "pr-42" })),
       );
       expect(error).toBeInstanceOf(Convex.DeploymentIdentityChange);
       expect(error).toMatchObject({
@@ -245,10 +271,12 @@ describe("Convex.Deployment", () => {
     Effect.gen(function* () {
       const fake = new FakeConvex().install();
       const projectId = fake.addProject({ name: NAME, teamId: TEAM });
-      const first = yield* stack.deploy(deployment({ projectId, type: "preview", name: "pr-42" }));
+      const first = yield* stack.deploy(
+        deployment({ project: { projectId }, type: "preview", name: "pr-42" }),
+      );
       const from = fake.sent.length;
       const error = yield* Effect.flip(
-        stack.deploy(deployment({ projectId, type: "preview", name: "pr-43" })),
+        stack.deploy(deployment({ project: { projectId }, type: "preview", name: "pr-43" })),
       );
       expect(error).toMatchObject({
         _tag: "DeploymentIdentityChange",
@@ -266,9 +294,11 @@ describe("Convex.Deployment", () => {
       const fake = new FakeConvex().install();
       const projectId = fake.addProject({ name: NAME, teamId: TEAM });
       const otherProject = fake.addProject({ name: `${NAME}-2`, teamId: TEAM });
-      yield* stack.deploy(deployment({ projectId, type: "dev", name: "staging" }));
+      yield* stack.deploy(deployment({ project: { projectId }, type: "dev", name: "staging" }));
       const error = yield* Effect.flip(
-        stack.deploy(deployment({ projectId: otherProject, type: "dev", name: "staging" })),
+        stack.deploy(
+          deployment({ project: { projectId: otherProject }, type: "dev", name: "staging" }),
+        ),
       );
       expect(error).toMatchObject({
         _tag: "DeploymentIdentityChange",
@@ -285,10 +315,14 @@ describe("Convex.Deployment", () => {
       const projectId = fake.addProject({ name: NAME, teamId: TEAM });
       const out = yield* stack.deploy(
         Effect.gen(function* () {
-          const prod = yield* Convex.Deployment("Prod", { projectId, type: "prod" });
-          const dev = yield* Convex.Deployment("Dev", { projectId, type: "dev", name: "staging" });
+          const prod = yield* Convex.Deployment("Prod", { project: { projectId }, type: "prod" });
+          const dev = yield* Convex.Deployment("Dev", {
+            project: { projectId },
+            type: "dev",
+            name: "staging",
+          });
           const preview = yield* Convex.Deployment("Preview", {
-            projectId,
+            project: { projectId },
             type: "preview",
             name: "pr-42",
           });
@@ -306,7 +340,9 @@ describe("Convex.Deployment", () => {
     Effect.gen(function* () {
       const fake = new FakeConvex().install();
       const projectId = fake.addProject({ name: NAME, teamId: TEAM });
-      const out = yield* stack.deploy(destroyable({ projectId, type: "preview", name: "pr-42" }));
+      const out = yield* stack.deploy(
+        destroyable({ project: { projectId }, type: "preview", name: "pr-42" }),
+      );
       yield* stack.destroy();
       expect(fake.lines()).toContain(`POST ${API}/deployments/${out.name}/delete`);
       expect(fake.deployment(out.name)).toBeUndefined();
@@ -321,7 +357,7 @@ describe("Convex.Deployment", () => {
         Effect.gen(function* () {
           return attributes(
             yield* Convex.Deployment("Deployment", {
-              projectId,
+              project: { projectId },
               type: "preview",
               name: "pr-42",
             }).pipe(RemovalPolicy.retain()),
@@ -340,7 +376,7 @@ describe("Convex.Deployment", () => {
       Effect.gen(function* () {
         const fake = new FakeConvex().install();
         const projectId = fake.addProject({ name: NAME, teamId: TEAM });
-        const out = yield* stack.deploy(destroyable({ projectId, type: "prod" }));
+        const out = yield* stack.deploy(destroyable({ project: { projectId }, type: "prod" }));
         yield* stack.destroy();
         expect(fake.lines().filter((line) => line.endsWith("/delete"))).toEqual([]);
         expect(fake.deployment(out.name)).toBeDefined();
@@ -351,7 +387,9 @@ describe("Convex.Deployment", () => {
     Effect.gen(function* () {
       const fake = new FakeConvex().install();
       const projectId = fake.addProject({ name: NAME, teamId: TEAM });
-      const out = yield* stack.deploy(destroyable({ projectId, type: "dev", name: "staging" }));
+      const out = yield* stack.deploy(
+        destroyable({ project: { projectId }, type: "dev", name: "staging" }),
+      );
       fake.deployments.splice(
         fake.deployments.findIndex((row) => row["name"] === out.name),
         1,
@@ -367,7 +405,9 @@ describe("Convex.Deployment", () => {
       Effect.gen(function* () {
         const fake = new FakeConvex().install();
         const projectId = fake.addProject({ name: NAME, teamId: TEAM });
-        const out = yield* stack.deploy(destroyable({ projectId, type: "dev", name: "staging" }));
+        const out = yield* stack.deploy(
+          destroyable({ project: { projectId }, type: "dev", name: "staging" }),
+        );
         // Someone makes the deployment a production deployment in Convex.
         const row = fake.deployments.find((candidate) => candidate["name"] === out.name);
         if (row !== undefined) row["deploymentType"] = "prod";
@@ -381,7 +421,7 @@ describe("Convex.Deployment", () => {
     Effect.gen(function* () {
       const fake = new FakeConvex().install();
       const projectId = fake.addProject({ name: NAME, teamId: TEAM });
-      const first = yield* stack.deploy(deployment({ projectId, type: "prod" }));
+      const first = yield* stack.deploy(deployment({ project: { projectId }, type: "prod" }));
       // Another production deployment becomes the default; the first one stays.
       const next = fake.addDeployment({ projectId, type: "dev", name: "production-2" });
       for (const row of fake.deployments) {
@@ -391,7 +431,7 @@ describe("Convex.Deployment", () => {
           row["isDefault"] = true;
         }
       }
-      const second = yield* stack.deploy(deployment({ projectId, type: "prod" }));
+      const second = yield* stack.deploy(deployment({ project: { projectId }, type: "prod" }));
       expect(second.name).toBe(next);
       expect(second.url).toBe(`https://${next}.convex.cloud`);
       expect(fake.deployment(first.name)).toBeDefined();
@@ -402,20 +442,19 @@ describe("Convex.Deployment", () => {
     Effect.gen(function* () {
       const fake = new FakeConvex().install();
       const projectId = fake.addProject({ name: NAME, teamId: TEAM });
-      const deployment = fake.project(projectId)?.prodDeploymentName ?? "";
       const withVariable = Effect.gen(function* () {
-        const prod = yield* Convex.Deployment("Prod", { projectId, type: "prod" });
+        const prod = yield* Convex.Deployment("Prod", { project: { projectId }, type: "prod" });
         // A dependent that uses only the reference.
-        yield* Convex.EnvironmentVariable("Reference", {
-          deployment,
-          deployKey: Redacted.make(`dev:${deployment}|REDACTED`),
-          name: "PRODUCTION_REFERENCE",
-          value: prod.reference,
+        const dev = yield* Convex.Deployment("Dev", {
+          project: { projectId },
+          type: "dev",
+          name: "staging",
+          env: { PRODUCTION_REFERENCE: prod.reference },
         });
-        return { reference: prod.reference };
+        return { reference: prod.reference, dev: dev.name };
       });
-      yield* stack.deploy(withVariable);
-      expect(fake.variables.get(deployment)).toEqual({ PRODUCTION_REFERENCE: "production" });
+      const first = yield* stack.deploy(withVariable);
+      expect(fake.variables.get(first.dev)).toEqual({ PRODUCTION_REFERENCE: "production" });
       const next = fake.addDeployment({ projectId, type: "dev", name: "production-2" });
       for (const row of fake.deployments) {
         if (row["isDefault"] === true) row["isDefault"] = false;
@@ -426,7 +465,7 @@ describe("Convex.Deployment", () => {
       }
       const second = yield* stack.deploy(withVariable);
       expect(second.reference).toBe("production-2");
-      expect(fake.variables.get(deployment)).toEqual({ PRODUCTION_REFERENCE: "production-2" });
+      expect(fake.variables.get(first.dev)).toEqual({ PRODUCTION_REFERENCE: "production-2" });
     }),
   );
 });
@@ -445,7 +484,7 @@ describe("Convex.Deployment read", () => {
             id: "Prod",
             fqn: "Prod",
             instanceId: "instance-1",
-            olds: { projectId, type: "prod" },
+            olds: { project: { projectId }, type: "prod" },
             output: {
               projectId,
               type: "prod",
@@ -454,6 +493,8 @@ describe("Convex.Deployment read", () => {
               previewName: undefined,
               url: `https://${name}.convex.cloud`,
               siteUrl: `https://${name}.convex.site`,
+              hash: undefined,
+              envNames: [],
             },
           }) ?? Effect.die("Convex.Deployment has no read")
         );
@@ -461,7 +502,8 @@ describe("Convex.Deployment read", () => {
         Effect.provide(
           DeploymentProvider().pipe(
             Layer.provide(ManagementApiLive()),
-            Layer.provide(Convex.fromToken(Redacted.make("test-token"))),
+            Layer.provide(Convex.fromValues({ accessToken: Redacted.make("test-token") })),
+            Layer.provide(NodeServices.layer),
           ),
         ),
       ),
