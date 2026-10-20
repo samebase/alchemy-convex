@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 (2026-10-20)
 
 The Convex plane. `Convex.Deployment` now owns the push, so no deploy key goes from one resource to
 another and nothing is shaped for Workers Builds. Breaking: see the removed resources.
