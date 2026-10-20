@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.0 (2026-10-20)
+
+Alchemy state in Convex. `state: Convex.state()` keeps the stack's state in an `alchemyState`
+component that the app mounts from `@samebase/alchemy-convex/convex.config`, in the production
+deployment of the project, so a stack needs no Cloudflare or S3 store.
+
+- The store calls the component the way `convex run --component` does, so Convex checks the key:
+  `CONVEX_STATE_DEPLOY_KEY`, a production deploy key with `deployment:data:view` and
+  `deployment:data:write`, on every run including preview runs. A preview run can therefore read
+  and write production tables; it cannot push code or change variables.
+- First run: with no component on the deployment, writes stay in memory until the deployment push
+  installs it, then they are written. A run that ends with unsaved state fails.
+- No lock: keep one CI concurrency group per stage.
+- The rows hold the JSON text Alchemy writes to local state files; nothing is re-encoded.
+
 ## 0.4.1 (2026-10-20)
 
 Current dependencies. The code and the resources do not change.

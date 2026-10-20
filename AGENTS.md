@@ -39,6 +39,6 @@
 
 ## Releases
 
-- To release, change `version` in `package.json` and add a `CHANGELOG.md` entry in a pull request.
+- The pull request that is the release carries the `version` change in `package.json` and the
+  `CHANGELOG.md` entry; a separate version-only pull request is not needed.
 - After the merge, `.github/workflows/release.yml` publishes that version from `main` to npm.
-- Do not change `version` in other pull requests.
