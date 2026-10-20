@@ -1,3 +1,10 @@
 allowBuilds:
   esbuild: true
   workerd: false
+# 7 days, the same rule as renovate.json. pnpm 11 checks every lockfile entry against it.
+minimumReleaseAge: 10080
+# One Vite and one Vitest for `vp test` and for the packages that import them directly
+# (@effect/vitest, alchemy/Test/Vitest). Keep these at the versions that vite-plus bundles.
+overrides:
+  vite@*: npm:@voidzero-dev/vite-plus-core@1.1.0
+  vitest@*: 5.0.3

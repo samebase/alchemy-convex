@@ -12,15 +12,18 @@ This is a community provider, maintained by [Samebase](https://samebase.com). Th
 follows the "Convex Plain" mode of [rjdellecese/confect#408](https://github.com/rjdellecese/confect/issues/408).
 [docs/design/convex-plane.md](docs/design/convex-plane.md) records the decisions.
 
-Status: pinned to `alchemy@2.0.0-beta.80` and Effect 4. Alchemy ships breaking changes between
+Status: pinned to `alchemy@2.0.0-beta.83` and Effect 4. Alchemy ships breaking changes between
 betas; upgrade this package and Alchemy together. A live test runs the full sequence with the real
 Convex CLI: create, push, no-op, change, preview, deploy keys alone, and destroy.
 
 ## Install
 
 ```sh
-pnpm add -D @samebase/alchemy-convex alchemy@2.0.0-beta.80 effect@^4.0.0 @effect/platform-node@^4.0.0 convex
+pnpm add -D @samebase/alchemy-convex alchemy@2.0.0-beta.83 effect@^4.0.0 @effect/platform-node@^4.0.0 convex
 ```
+
+Use one version for `effect` and for each `@effect/*` package. A mix fails at load time, such as
+`@effect/platform-node-shared` 4.0.5 next to `effect` 4.0.3.
 
 ## Example
 

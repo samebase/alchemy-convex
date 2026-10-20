@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.4.1 (2026-10-20)
+
+Current dependencies. The code and the resources do not change.
+
+- Peer dependency `alchemy`: `2.0.0-beta.80` to `2.0.0-beta.83`. Upgrade Alchemy together with
+  this version. The `effect` and `@effect/platform-node` peer ranges stay `^4.0.0`.
+- Use one version for `effect` and for each `@effect/*` package. `@effect/platform-node-shared`
+  4.0.5 imports `make` from `effect/Path`, and `effect` 4.0.3 does not have it. Alchemy then
+  cannot load `@effect/platform-node` and stops.
+
+Development dependencies, the versions that this release is tested with:
+
+| Package                  | From              | To            |
+| ------------------------ | ----------------- | ------------- |
+| `effect`                 | 4.0.0             | 4.0.4         |
+| `@effect/platform-node`  | 4.0.0             | 4.0.4         |
+| `@effect/vitest`         | 4.0.0             | 4.0.4         |
+| `alchemy`                | 2.0.0-beta.80     | 2.0.0-beta.83 |
+| `vite-plus`              | 0.3.0             | 1.1.0         |
+| `vitest`                 | ^4.0.0 (4.1.11)   | 5.0.3         |
+| `typescript`             | ^5.9.0 (5.9.3)    | 6.0.3         |
+| `@types/node`            | ^24.0.0 (24.19.1) | 24.19.2       |
+| `convex`                 | ^1.45.0 (1.46.0)  | 1.46.0        |
+| `@arethetypeswrong/core` | ^0.18.5           | 0.18.5        |
+| `publint`                | ^0.3.25           | 0.3.25        |
+| `packageManager`         | pnpm 11.18.0      | pnpm 11.28.5  |
+
+- Every development dependency now has an exact version. The lockfile has one version of each
+  `effect` and `@effect/*` package (4.0.4).
+- `pnpm-workspace.yaml` sets `minimumReleaseAge` to 7 days, the rule of `renovate.json`. pnpm
+  checks each lockfile entry against it.
+- `pnpm-workspace.yaml` overrides `vite` and `vitest` with the versions that `vite-plus` bundles.
+  Then `vp test`, `@effect/vitest`, and `alchemy/Test/Vitest` use one Vitest copy. With two
+  copies, the tests stop with "Vitest failed to find the current suite".
+
+Not updated:
+
+- `effect` and `@effect/*` 4.0.5, `convex` 1.47.0, `vite-plus` 1.2.0 and 1.3.0, and pnpm 11.28.6:
+  released less than 7 days ago.
+- `vitest` 5.0.4: `vite-plus` 1.1.0 bundles 5.0.3, and the tests need one Vitest copy.
+- `typescript` 7.0.2: `vp pack` emits declarations with TypeScript 7 only through an experimental
+  API and fails the build.
+- `@types/node` 26: this package runs on Node 24 (`.node-version`) and Node 22 (`engines`).
+- pnpm 12: a major version. It gets its own pull request.
+
 ## 0.4.0 (2026-10-20)
 
 The Convex plane. `Convex.Deployment` now owns the push, so no deploy key goes from one resource to
@@ -11,7 +56,7 @@ another and nothing is shaped for Workers Builds. Breaking: see the removed reso
   package.json, convex.json, the lockfile, the deployment name, and `env` is the content identity:
   the same hash is a no-op. New outputs: `hash` and `envNames`.
 - The hash covers every file of the app that git does not ignore. `source: { path, command,
-include }` runs a push command, such as `convex-hosting deploy --build ...`, with the key in
+  include }` runs a push command, such as `convex-hosting deploy --build ...`, with the key in
   `CONVEX_DEPLOY_KEY`, and `include` narrows the hash. `source` must be the functions directory
   of convex.json (`SourceMismatch`).
 - A failed push sets the changed variables back and deletes a dev or preview deployment that the
