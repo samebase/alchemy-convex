@@ -194,9 +194,9 @@ describe("withRunRecord", () => {
     expect(withRunRecord(own, record)).toBe(own);
   });
 
-  it("leaves an output that is not a plain object as it is", () => {
-    expect(withRunRecord("https://app.convex.site", record)).toBe("https://app.convex.site");
-    expect(withRunRecord(["a"], record)).toEqual(["a"]);
-    expect(withRunRecord(null, record)).toBeNull();
+  it("has no document for an output that is not a plain object", () => {
+    expect(withRunRecord("https://app.convex.site", record)).toBeUndefined();
+    expect(withRunRecord(["a"], record)).toBeUndefined();
+    expect(withRunRecord(null, record)).toBeUndefined();
   });
 });

@@ -189,13 +189,13 @@ export const runRecord = (where: RunEnvironment): Effect.Effect<RunRecord, RunRe
 
 /**
  * The output document of a stage: the stack's output plus the record under
- * {@link RUN_RECORD_KEY}. A value that the stack itself put under that key
- * stays. An output that is not a plain object has no place for the key and
- * stays as it is.
+ * {@link RUN_RECORD_KEY}, or undefined for an output with no place for the
+ * key (a string, an array, null). A value that the stack itself put under
+ * the key stays.
  */
-export const withRunRecord = (output: unknown, record: RunRecord): unknown =>
+export const withRunRecord = (output: unknown, record: RunRecord): object | undefined =>
   typeof output === "object" && output !== null && !Array.isArray(output)
     ? RUN_RECORD_KEY in output
       ? output
       : { ...output, [RUN_RECORD_KEY]: record }
-    : output;
+    : undefined;

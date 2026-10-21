@@ -410,12 +410,13 @@ export const makeConvexState = (options: StoreOptions) =>
       setOutput: (request) =>
         Effect.gen(function* () {
           const recordedAt = new Date(yield* Clock.currentTimeMillis).toISOString();
-          const value = withRunRecord(request.value, { ...options.run, recordedAt });
-          if (value === request.value) {
+          const document = withRunRecord(request.value, { ...options.run, recordedAt });
+          if (document === undefined) {
             yield* Effect.logWarning(
               `Convex state: the output of ${request.stack}/${request.stage} is not an object, so it carries no run record.`,
             );
           }
+          const value = document ?? request.value;
           yield* remote.setOutput({ stack: request.stack, stage: request.stage, value });
           return value;
         }),
