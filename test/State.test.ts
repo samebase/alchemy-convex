@@ -22,7 +22,7 @@ import { fromValues } from "../src/Credentials.ts";
 import { ManagementApi, ManagementApiLive } from "../src/ManagementApi.ts";
 import { makeConvexState, RUN_KEY_ACTIONS, state, STORE_PROJECT_NAME } from "../src/State.ts";
 import { STORE_VERSION } from "../src/store/convex/version.ts";
-import { FakeConvex, stateFixture } from "./fakeConvex.ts";
+import { FakeConvex, recorded, stateFixture } from "./fakeConvex.ts";
 
 const TEAM = 38516;
 const TOKEN = "test-token";
@@ -202,7 +202,7 @@ describe("Convex.state", () => {
     expect(await run(service.list(other))).toEqual(["Project"]);
   });
 
-  it("upgrades an older store and refuses a newer one", async () => {
+  it("upgrades an older store and uses a newer one as it is", async () => {
     const fake = new FakeConvex().install();
     const deployment =
       fake.project(fake.addProject({ name: STORE_PROJECT_NAME, teamId: TEAM }))
@@ -211,13 +211,65 @@ describe("Convex.state", () => {
     const store = fake.addStore(deployment, STORE_VERSION);
     fake.scripted.set(`POST ${deployment}.convex.cloud/api/function`, [
       { status: 200, body: { ...stateFixture("function_version.json"), value: 0 } },
+      { status: 200, body: { ...stateFixture("function_version.json"), value: 0 } },
     ]);
     await run(open());
     expect(await run(runs())).toHaveLength(1);
 
+    // Another run pushed a newer store between the first read and the push: no push here.
+    fake.scripted.set(`POST ${deployment}.convex.cloud/api/function`, [
+      { status: 200, body: { ...stateFixture("function_version.json"), value: 0 } },
+    ]);
     store.version = STORE_VERSION + 1;
-    expect(await failureOf(open())).toContain("Upgrade @samebase/alchemy-convex");
+    const { service } = await run(open());
     expect(await run(runs())).toHaveLength(1);
+    expect(await run(service.listStacks())).toEqual([]);
+
+    // A newer store serves this client: the names are a wire contract.
+    const newer = await run(open());
+    expect(await run(runs())).toHaveLength(1);
+    expect(await run(newer.service.listStacks())).toEqual([]);
+  });
+
+  it("keeps one store when two first runs create the project at the same time", async () => {
+    const fake = new FakeConvex().install();
+    let other = 0;
+    // The listing before the create is empty, and the other run creates its project meanwhile.
+    fake.scripted.set(`GET ${API}/teams/${TEAM}/projects`, [
+      {
+        status: 200,
+        body: { ...recorded("teams_projects.json"), items: [], pagination: { hasMore: false } },
+        meanwhile: () => {
+          other = fake.addProject({ name: STORE_PROJECT_NAME, teamId: TEAM });
+          fake.addStore(fake.project(other)?.prodDeploymentName ?? "", STORE_VERSION);
+        },
+      },
+    ]);
+    const { service } = await run(open());
+    const mine = fake.projects.filter((row) => row["name"] === STORE_PROJECT_NAME);
+    expect(mine.map((row) => row["id"])).toEqual([other]);
+    expect(fake.lines().filter((line) => line.endsWith("/delete"))).toHaveLength(1);
+    expect(await run(runs())).toEqual([]);
+    await run(service.set({ ...stack, fqn: "Project", value: created("Project") }));
+    expect(fake.stores.get(fake.project(other)?.prodDeploymentName ?? "")?.rows).toHaveLength(1);
+  });
+
+  it("replaces a key that stopped working during the run", async () => {
+    const fake = new FakeConvex().install();
+    const deployment =
+      fake.project(fake.addProject({ name: STORE_PROJECT_NAME, teamId: TEAM }))
+        ?.prodDeploymentName ?? "";
+    fake.addStore(deployment, STORE_VERSION);
+    const { service, close } = await run(open());
+    // The key expired: Convex forgets it, and the next call gets HTTP 403.
+    fake.keys.set(deployment, []);
+    await run(service.set({ ...stack, fqn: "Project", value: created("Project") }));
+    expect(await run(service.list(stack))).toEqual(["Project"]);
+    expect(
+      keyCalls(fake).filter((request) => request.path.endsWith("create_deploy_key")),
+    ).toHaveLength(2);
+    await run(close);
+    expect(fake.keys.get(deployment)).toEqual([]);
   });
 
   it("does not push over a project with code that is not the store", async () => {

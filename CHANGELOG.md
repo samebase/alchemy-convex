@@ -9,13 +9,15 @@ first run creates. The `alchemyState` component, `@samebase/alchemy-convex/conve
 can create and destroy its own project.
 
 - The store functions are internal and pushed by the package itself, from `src/store/convex`, with
-  the Convex CLI of the app, when `state:version` is missing or older. A newer store is never
-  replaced. Every function keeps its name; `version` is new, and `stacks` and `stages` also list a
-  stage that has only an output.
+  the Convex CLI of the app, when `state:version` is missing or older. A newer store serves an
+  older package as it is and is never replaced. Every function keeps its name; `version` is new,
+  and `stacks` and `stages` also list a stage that has only an output.
 - Each run gets a deploy key of the store deployment with
   `deployment:functions:runInternalQueries` and `runInternalMutations` only, deleted at the end of
-  the run. A reader of the index needs `runInternalQueries`; `deployment:data:view` does not run an
-  internal function.
+  the run, and replaced once when a call gets HTTP 401 or 403. A reader of the index needs
+  `runInternalQueries`; `deployment:data:view` does not run an internal function.
+- Two first runs of a team that both create `alchemy-state` end on the oldest project: the other
+  run deletes its own empty project.
 - `Convex.state({ team })` takes the team, like `Convex.Project`. The 0.5.0 state in an
   `alchemyState` component is not read: run the first deploy with `--adopt` so that the resources
   of the stack are taken over.

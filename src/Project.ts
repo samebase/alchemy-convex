@@ -238,12 +238,13 @@ export const getProjectById = (api: ManagementApiService, projectId: number) =>
   );
 
 /**
- * The one project in the team with exactly this name, or undefined. Reads
- * every page. `q` narrows the listing on the server, and the exact match
- * here decides. Pattern from Confect `packages/alchemy/src/ConvexClient.ts`
- * and `Project.ts` (https://github.com/rjdellecese/confect, ISC license).
+ * Every project in the team with exactly this name, in the order of the
+ * listing. Reads every page. `q` narrows the listing on the server, and the
+ * exact match here decides. Pattern from Confect
+ * `packages/alchemy/src/ConvexClient.ts` and `Project.ts`
+ * (https://github.com/rjdellecese/confect, ISC license).
  */
-export const findProjectByName = (api: ManagementApiService, teamId: number, name: string) =>
+export const listProjectsByName = (api: ManagementApiService, teamId: number, name: string) =>
   Effect.gen(function* () {
     const matches: ProjectDetails[] = [];
     const seenCursors = new Set<string>();
@@ -272,15 +273,18 @@ export const findProjectByName = (api: ManagementApiService, teamId: number, nam
       seenCursors.add(next);
       cursor = next;
     }
-    if (matches.length > 1) {
-      return yield* new AmbiguousProject({
-        teamId,
-        name,
-        projectIds: matches.map((row) => row.id),
-      });
-    }
-    return matches[0];
+    return matches;
   });
+
+/** The one project in the team with exactly this name, or undefined. More than one is an error. */
+export const findProjectByName = (api: ManagementApiService, teamId: number, name: string) =>
+  listProjectsByName(api, teamId, name).pipe(
+    Effect.flatMap((matches) =>
+      matches.length > 1
+        ? new AmbiguousProject({ teamId, name, projectIds: matches.map((row) => row.id) })
+        : Effect.succeed(matches[0]),
+    ),
+  );
 
 /**
  * POST /teams/{team_id}/create_project, then GET /projects/{id}. The identity

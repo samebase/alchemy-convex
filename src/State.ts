@@ -16,7 +16,12 @@
 // CLI pushes src/store/convex to it, with a push key that is deleted after
 // the push. The functions are internal, so only POST /api/function with such
 // a key reaches them: a public function of a root app answers anyone who
-// knows the deployment URL (measured).
+// knows the deployment URL (measured). A key that stops working during a
+// long run (it expires after two hours) is replaced once per call.
+//
+// Two first runs of a team can both create a project named `alchemy-state`.
+// The run whose project is not the oldest deletes its own, before it writes
+// anything, and uses the oldest: both runs end on one store.
 //
 // The function names are a wire contract: Samebase reads `stacks` and
 // `getOutput` by name, and an older client calls an older set of names. A
@@ -44,8 +49,19 @@ import {
 } from "alchemy/State";
 import { fromConfig } from "./Credentials.ts";
 import { ProductionDeploymentNotFound } from "./Deployment.ts";
-import { ManagementApi, ManagementApiLive, type ManagementApiService } from "./ManagementApi.ts";
-import { createProject, findProjectByName, prodDeploymentOf } from "./Project.ts";
+import {
+  absentAsUndefined,
+  ManagementApi,
+  ManagementApiLive,
+  type ManagementApiService,
+  retryIdempotentWrite,
+} from "./ManagementApi.ts";
+import {
+  createProject,
+  findProjectByName,
+  listProjectsByName,
+  prodDeploymentOf,
+} from "./Project.ts";
 import {
   createDeployKey,
   deleteDeployKey,
@@ -78,6 +94,10 @@ type Reply = typeof Reply.Type;
 
 /** The error reply of /api/function for a function that the deployment does not have (recorded). */
 const MISSING_FUNCTION = /Could not find function for '/;
+
+/** HTTP 401 or 403 from the function API: the key is gone or expired (recorded: 403 without a key). */
+const isUnauthorized = (error: StateStoreError) =>
+  error.http?.status === 401 || error.http?.status === 403;
 
 const failure = (message: string) => new StateStoreError({ message: `Convex state: ${message}` });
 
@@ -254,36 +274,87 @@ const pushStore = (
   });
 
 /**
+ * Creates the state project of the team. Two first runs can both create one:
+ * the run whose project is not the oldest deletes its own, which holds
+ * nothing yet, and uses the oldest, so that every run ends on one store.
+ */
+const createStoreProject = (api: ManagementApiService, teamId: number, team: string | number) =>
+  Effect.gen(function* () {
+    yield* Effect.logInfo(
+      `Convex state: creating the project ${STORE_PROJECT_NAME} in team ${team}`,
+    );
+    const created = yield* createProject(api, teamId, {
+      name: STORE_PROJECT_NAME,
+      deploymentType: "prod",
+      deploymentRegion: undefined,
+    });
+    const all = yield* listProjectsByName(api, teamId, STORE_PROJECT_NAME);
+    const oldest = all.reduce((a, b) => (b.id < a.id ? b : a), created);
+    if (oldest.id === created.id) return created;
+    yield* Effect.logInfo(
+      `Convex state: another run created ${STORE_PROJECT_NAME} ${oldest.id} first; project ${created.id} is deleted again.`,
+    );
+    yield* absentAsUndefined(
+      retryIdempotentWrite(
+        api.requestVoid("delete project", (client) =>
+          client.POST("/projects/{project_id}/delete", {
+            params: { path: { project_id: created.id } },
+          }),
+        ),
+      ),
+    );
+    return oldest;
+  });
+
+/**
  * The StateService over the `alchemy-state` project of the team: found or
  * created, its store pushed when it is missing or older, and read and
- * written with a key of this run.
+ * written with the keys of this run.
  */
 export const makeConvexState = (options: StoreOptions) =>
   Effect.gen(function* () {
     const { api, team } = options;
     const teamId = yield* api.resolveTeamId(team);
     const found = yield* findProjectByName(api, teamId, STORE_PROJECT_NAME);
-    const project =
-      found ??
-      (yield* Effect.logInfo(
-        `Convex state: creating the project ${STORE_PROJECT_NAME} in team ${team}`,
-      ).pipe(
-        Effect.andThen(
-          createProject(api, teamId, {
-            name: STORE_PROJECT_NAME,
-            deploymentType: "prod",
-            deploymentRegion: undefined,
-          }),
-        ),
-      ));
+    const project = found ?? (yield* createStoreProject(api, teamId, team));
     const deployment = yield* prodDeploymentOf(api, project.id);
     if (deployment === undefined) {
       return yield* new ProductionDeploymentNotFound({ projectId: project.id });
     }
 
-    const key = yield* createDeployKey(api, deployment.name, "alchemy-state", RUN_KEY_ACTIONS);
-    yield* Scope.addFinalizer(options.scope, deleteDeployKey(api, deployment.name, key));
-    const functions = makeFunctionApi(deployment.deploymentUrl, key);
+    // The keys of this run, deleted together when the scope closes. A call
+    // that the current key no longer authorizes gets one new key and one
+    // more attempt.
+    const keys: Redacted.Redacted<string>[] = [];
+    yield* Scope.addFinalizer(
+      options.scope,
+      Effect.suspend(() =>
+        Effect.forEach(keys, (key) => deleteDeployKey(api, deployment.name, key), {
+          discard: true,
+        }),
+      ),
+    );
+    const mint = createDeployKey(api, deployment.name, "alchemy-state", RUN_KEY_ACTIONS).pipe(
+      Effect.map((key) => {
+        keys.push(key);
+        return makeFunctionApi(deployment.deploymentUrl, key);
+      }),
+      Effect.mapError((error) => failure(`no key for ${deployment.name}: ${error.message}`)),
+    );
+    let current = yield* mint;
+    const functions: FunctionApi = {
+      call: (path, args) =>
+        current.call(path, args).pipe(
+          Effect.catchIf(isUnauthorized, () =>
+            mint.pipe(
+              Effect.flatMap((next) => {
+                current = next;
+                return next.call(path, args);
+              }),
+            ),
+          ),
+        ),
+    };
 
     const version = yield* storeVersion(functions);
     if (version === undefined || version < STORE_VERSION) {
@@ -293,16 +364,22 @@ export const makeConvexState = (options: StoreOptions) =>
           `project ${STORE_PROJECT_NAME} (${project.id}) of team ${team} has code that is not the state store, and Convex.state does not push over it. Rename that project in the Convex dashboard.`,
         );
       }
-      yield* pushStore(options, deployment);
-      const pushed = yield* storeVersion(functions);
-      if (pushed !== STORE_VERSION) {
-        return yield* failure(
-          `${deployment.name} answers store version ${pushed ?? "none"} after the push of version ${STORE_VERSION}.`,
-        );
+      // Another run can push a newer store in the meantime: read again right
+      // before the push. The push itself has no lock (see the design note).
+      const now = yield* storeVersion(functions);
+      if (now === undefined || now < STORE_VERSION) {
+        yield* pushStore(options, deployment);
+        const pushed = yield* storeVersion(functions);
+        if (pushed === undefined || pushed < STORE_VERSION) {
+          return yield* failure(
+            `${deployment.name} answers store version ${pushed ?? "none"} after the push of version ${STORE_VERSION}.`,
+          );
+        }
       }
     } else if (version > STORE_VERSION) {
-      return yield* failure(
-        `the store of team ${team} is version ${version}, and this version of @samebase/alchemy-convex knows version ${STORE_VERSION}. Upgrade @samebase/alchemy-convex; the store is never pushed back to an older version.`,
+      // The names are a wire contract, so a newer store serves this client.
+      yield* Effect.logInfo(
+        `Convex state: the store of team ${team} is version ${version}, newer than version ${STORE_VERSION} of this package, and it stays.`,
       );
     }
 

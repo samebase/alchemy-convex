@@ -41,7 +41,8 @@ reads.
   a key it answers HTTP 403.
 - Credentials: each run creates a deploy key of the store deployment with
   `deployment:functions:runInternalQueries` and `deployment:functions:runInternalMutations`, expiry
-  two hours, and deletes it when the scope of the stack closes. Measured: `deployment:data:view` and
+  two hours, and deletes it when the scope of the stack closes. A call that gets HTTP 401 or 403,
+  such as after the expiry in a run longer than two hours, creates one new key and runs once more. Measured: `deployment:data:view` and
   `deployment:data:write` do not run an internal function; the reply names the action that is
   missing. A reader of the index, such as Samebase, needs a key with `runInternalQueries` only.
   The deployment also accepts the Convex CLI login token itself as `Authorization: Convex <token>`;
@@ -50,7 +51,9 @@ reads.
   function (reply `Could not find function for 'state:version'`) or an older number makes the run
   push `src/store/convex` with the Convex CLI of the app, `convex deploy --typecheck disable
   --codegen disable`, from `src/store` of the installed package, with a push key of
-  `PUSH_KEY_ACTIONS` that is deleted after the push. A newer number fails the run: the store is never
+  `PUSH_KEY_ACTIONS` that is deleted after the push. The version is read again right before the
+  push, because another run can push a newer store in the meantime. A newer number is used as it
+  is: the names are a wire contract, so a newer store serves an older client, and the store is never
   pushed back. Unlike the Cloudflare store, which compares for equality and would deploy an older
   Worker over a newer one. A deployment with code but no `state:version` is another app with the
   name of the store, and the run fails instead of pushing over it.
@@ -95,8 +98,13 @@ CLI login and no `CONVEX_ACCESS_TOKEN`. The store deployment is `artful-alligato
 - No lock: keep the CI concurrency group for each stage. No encryption beyond Convex at rest; a
   holder of a key with `runInternalQueries` reads every `Redacted` prop of every stack of the team.
 - Two first runs of two repositories at the same time in a team with no store can both create a
-  project named `alchemy-state`; the next run fails with `AmbiguousProject` and names both ids. Run
-  the first deploy of a team once, or delete the extra project in the dashboard.
+  project named `alchemy-state`. Each run lists the projects again after its create; the run whose
+  project is not the oldest deletes its own, which holds nothing yet, and uses the oldest. A
+  duplicate that a person creates by hand still fails every run with `AmbiguousProject`.
+- The push of the store has no lock. Two runs of two package versions that both find an older
+  store can push in the order new, then old, in the seconds between the second read of the version
+  and the end of the push; the next run of the newer package pushes its store again. The upgrade
+  happens once for each new package version in a team.
 - A team access token is not measured here: the laptop proof used the Convex CLI login, which the
   Management API takes the same way. The first CI run of `samebase/base-alchemy` with
   `CONVEX_ACCESS_TOKEN` is the measurement.
