@@ -7,8 +7,8 @@
 //
 // A stage holds one row for each resource of its stack, so the reads of one
 // stage collect all rows. The function names are a wire contract: Samebase
-// reads `stacks` and `getOutput` by name, and an older client calls an older
-// set of names. Add functions; never rename or remove one.
+// reads `stacks`, `getOutput`, and `readStack` by name, and an older client
+// calls an older set of names. Add functions; never rename or remove one.
 import { v } from "convex/values";
 import type { QueryCtx } from "./_generated/server.js";
 import { internalMutation, internalQuery } from "./_generated/server.js";
@@ -215,5 +215,49 @@ export const setOutput = internalMutation({
     if (row === null) await ctx.db.insert("outputs", args);
     else await ctx.db.patch("outputs", row._id, { value: args.value });
     return null;
+  },
+});
+
+/**
+ * One call for a reader: every stage of a stack in name order, each with its
+ * resources in fqn order and its output, as the JSON texts that the rows
+ * hold. A stage with an output and no resource is listed with an empty
+ * resource list; a stage with resources and no output with `output: null`.
+ * Since store version 2.
+ */
+export const readStack = internalQuery({
+  args: { stack: v.string() },
+  returns: v.object({
+    stages: v.array(
+      v.object({
+        stage: v.string(),
+        resources: v.array(v.object({ fqn: v.string(), value: v.string() })),
+        output: v.union(v.string(), v.null()),
+      }),
+    ),
+  }),
+  handler: async (ctx, args) => {
+    // Both indexes order by stack, then stage, then (for resources) fqn.
+    const resources = await ctx.db
+      .query("resources")
+      .withIndex("by_fqn", (q) => q.eq("stack", args.stack))
+      .collect();
+    const outputs = await ctx.db
+      .query("outputs")
+      .withIndex("by_stage", (q) => q.eq("stack", args.stack))
+      .collect();
+    const stages = union(
+      [...new Set(resources.map((row) => row.stage))],
+      [...new Set(outputs.map((row) => row.stage))],
+    );
+    return {
+      stages: stages.map((stage) => ({
+        stage,
+        resources: resources
+          .filter((row) => row.stage === stage)
+          .map((row) => ({ fqn: row.fqn, value: row.value })),
+        output: outputs.find((row) => row.stage === stage)?.value ?? null,
+      })),
+    };
   },
 });

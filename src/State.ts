@@ -23,13 +23,19 @@
 // The run whose project is not the oldest deletes its own, before it writes
 // anything, and uses the oldest: both runs end on one store.
 //
-// The function names are a wire contract: Samebase reads `stacks` and
-// `getOutput` by name, and an older client calls an older set of names. A
-// name is never renamed or removed. STORE_VERSION rises when a function
-// changes in a way that an older client cannot use, and a client never
-// pushes an older store over a newer one.
+// The function names are a wire contract: Samebase reads `stacks`,
+// `getOutput`, and `readStack` by name, and an older client calls an older
+// set of names. A name is never renamed or removed. STORE_VERSION rises when
+// a function is added or changes in a way that an older client cannot use,
+// and a client never pushes an older store over a newer one.
+//
+// The stage output that `setOutput` stores is the stack's output plus the
+// run record of src/RunRecord.ts under the key `samebase.run`: the
+// repository, stack file, branch, pull request, commit, and run that wrote
+// the stage. `getOutput` gives the document back as stored.
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
@@ -70,6 +76,7 @@ import {
   PUSH_KEY_ACTIONS,
   withPushKey,
 } from "./Push.ts";
+import { type RunRecord, runRecord, withRunRecord } from "./RunRecord.ts";
 import { STORE_VERSION } from "./store/convex/version.ts";
 
 /** The name of the state project in each team. */
@@ -241,6 +248,8 @@ export interface StoreOptions {
   readonly scope: Scope.Scope;
   /** The functions directory that an outdated store gets: {@link storeDirectory}. */
   readonly store: string;
+  /** The record of this run, which `setOutput` adds to the stage output with the time of the write. */
+  readonly run: RunRecord;
 }
 
 /**
@@ -397,7 +406,19 @@ export const makeConvexState = (options: StoreOptions) =>
       set: (request) => remote.set(request).pipe(Effect.as(request.value)),
       delete: (request) => remote.delete(request).pipe(Effect.asVoid),
       deleteStack: (request) => remote.deleteStack(request).pipe(Effect.asVoid),
-      setOutput: (request) => remote.setOutput(request).pipe(Effect.as(request.value)),
+      // The document is the stack's output plus the record under `samebase.run`.
+      setOutput: (request) =>
+        Effect.gen(function* () {
+          const recordedAt = new Date(yield* Clock.currentTimeMillis).toISOString();
+          const value = withRunRecord(request.value, { ...options.run, recordedAt });
+          if (value === request.value) {
+            yield* Effect.logWarning(
+              `Convex state: the output of ${request.stack}/${request.stage} is not an object, so it carries no run record.`,
+            );
+          }
+          yield* remote.setOutput({ stack: request.stack, stage: request.stage, value });
+          return value;
+        }),
     };
     return service;
   });
@@ -425,12 +446,16 @@ export const state = (
           const api = yield* ManagementApi.pipe(
             Effect.provide(ManagementApiLive().pipe(Layer.provide(fromConfig()))),
           );
+          // The record comes before the first read, so a checkout that gives
+          // none stops the run before it changes anything.
+          const run = yield* runRecord({ cwd: process.cwd(), env: process.env });
           return yield* makeConvexState({
             team: options.team,
             api,
             spawner,
             scope,
             store: storeDirectory(),
+            run,
           });
         }).pipe(Effect.provideContext(context), Effect.orDie),
       );

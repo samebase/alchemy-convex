@@ -63,8 +63,19 @@ export interface Store {
 }
 
 /** The internal functions of the store that a query key runs, and those that need a mutation key. */
-const STORE_QUERIES = ["version", "stacks", "stages", "list", "get", "replaced", "getOutput"];
+const STORE_QUERIES = [
+  "version",
+  "stacks",
+  "stages",
+  "list",
+  "get",
+  "replaced",
+  "getOutput",
+  "readStack",
+];
 const STORE_MUTATIONS = ["set", "remove", "removeStack", "setOutput"];
+/** The store version that added a function; every other function is in version 1 (0.6.0). */
+const STORE_FUNCTION_SINCE: Record<string, number> = { readStack: 2 };
 const FunctionCall = Schema.Struct({
   path: Schema.String,
   args: Schema.Record(Schema.String, Schema.String),
@@ -450,16 +461,23 @@ export class FakeConvex {
     if (key === undefined) return json(403, stateFixture("function_no_key.json"));
     const { path, args } = Schema.decodeUnknownSync(FunctionCall)(body);
     const name = path.replace(/^state:/, "");
-    // A push of the fake CLI with a key of this deployment installs the store.
-    if (!this.stores.has(deployment) && this.pushedByCli(deployment)) {
-      this.addStore(deployment, STORE_VERSION);
+    // A push of the fake CLI with a key of this deployment installs the
+    // store, or raises an older one to the current version with its rows.
+    if (this.pushedByCli(deployment)) {
+      const pushed = this.stores.get(deployment);
+      if (pushed === undefined) this.addStore(deployment, STORE_VERSION);
+      else if (pushed.version < STORE_VERSION) pushed.version = STORE_VERSION;
     }
     const store = this.stores.get(deployment);
     const reply = (value: unknown) =>
       json(200, { ...stateFixture("function_version.json"), value });
     const error = (message: string) =>
       json(200, { ...stateFixture("function_version_missing.json"), errorMessage: message });
-    if (store === undefined || !(STORE_QUERIES.includes(name) || STORE_MUTATIONS.includes(name))) {
+    if (
+      store === undefined ||
+      !(STORE_QUERIES.includes(name) || STORE_MUTATIONS.includes(name)) ||
+      store.version < (STORE_FUNCTION_SINCE[name] ?? 1)
+    ) {
       return error(
         `[Request ID: fake] Server Error\nCould not find function for '${path}'. Did you forget to run \`npx convex dev\`?\n`,
       );
@@ -531,6 +549,26 @@ export class FakeConvex {
       case "setOutput":
         store.outputs.set(output, value);
         return reply(null);
+      case "readStack": {
+        const stages = [
+          ...new Set([
+            ...store.rows.filter((row) => row.stack === stack).map((row) => row.stage),
+            ...[...store.outputs.keys()]
+              .filter((name) => name.startsWith(`${stack}/`))
+              .map((name) => name.slice(`${stack}/`.length)),
+          ]),
+        ].sort();
+        return reply({
+          stages: stages.map((name) => ({
+            stage: name,
+            resources: store.rows
+              .filter((row) => row.stack === stack && row.stage === name)
+              .map((row) => ({ fqn: row.fqn, value: row.value }))
+              .sort((a, b) => (a.fqn < b.fqn ? -1 : a.fqn > b.fqn ? 1 : 0)),
+            output: store.outputs.get(`${stack}/${name}`) ?? null,
+          })),
+        });
+      }
       default:
         throw new Error(`FakeConvex has no store function ${path}`);
     }
