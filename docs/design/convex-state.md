@@ -144,6 +144,24 @@ CLI login and no `CONVEX_ACCESS_TOKEN`. The store deployment is `artful-alligato
 | A narrow key reads the index and the outputs              | With curl only: the project listing of the team, `create_deploy_key` with `deployment:functions:runInternalQueries`, `state:stacks` and `state:getOutput` answered, `state:set` was refused with the name of the missing action.                                                                  |
 | Not measured                                              | A team access token from the dashboard: the laptop has the Convex CLI login only. The first CI run of `samebase/base-alchemy` with `CONVEX_ACCESS_TOKEN` measures it.                                                                                                                             |
 
+### Measured for the run record (0.7.0)
+
+Proof on 2026-10-21 in team `nicu` with the scratch stack `samebase/tmp-d524-run-record`, run from
+a clone of this repository (`examples/run-record/alchemy.run.ts` on a local branch), with the
+Convex CLI login and no `CONVEX_ACCESS_TOKEN`. The reads used a key with
+`deployment:functions:runInternalQueries` only, minted through the Management API and deleted
+after each read. The project and the rows were deleted at the end; `samebase/base-alchemy` was not
+touched.
+
+| Check                                 | Result                                                                                                                                                                                                                                                                                                |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The store upgrade in place            | `deploy --stage prod`: `pushing the store version 2 to artful-alligator-66`, 4.2 s; `state:version` answered 2 after it, and `state:stacks` still listed `samebase/base-alchemy`.                                                                                                                     |
+| A laptop deploy records the checkout  | `state:getOutput` of `prod`: the stack's `projectId` and `convexUrl` plus `samebase.run` with `repository: "samebase/alchemy-convex"`, `stackFile: "examples/run-record/alchemy.run.ts"`, the branch and the HEAD commit of the clone, `pullRequest: null`, `runUrl: null`, `source: "laptop"`.       |
+| A pull request deploy records the run | `deploy --stage pr-1` with the GitHub Actions variables of a `pull_request` event and an event payload file: `pullRequest: 1`, `branch` from `GITHUB_HEAD_REF`, `headCommit` the `pull_request.head.sha` of the payload (not `GITHUB_SHA`), the run URL with the attempt, `source: "github-actions"`. |
+| One call reads the stack              | `state:readStack`: both stages in order, `pr-1` with `Backend` and `prod` with `Project`, each with its output document.                                                                                                                                                                              |
+| The read key cannot write             | `state:set` with the read key: `You do not have permission to perform this operation (deployment:functions:runInternalMutations)`.                                                                                                                                                                    |
+| Cleanup                               | `destroy --stage pr-1` deleted the preview deployment (0.8 s); `destroy --stage prod` deleted the project (0.5 s). After it: `stacks` without the scratch stack, `readStack` `{ stages: [] }`, no project named `tmp-d524`, `list_deploy_keys` of the store `[]`.                                     |
+
 ## Limits
 
 - No lock: keep the CI concurrency group for each stage. No encryption beyond Convex at rest; a
