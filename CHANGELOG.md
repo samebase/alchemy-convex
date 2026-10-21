@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.6.0 (unreleased)
+
+One state project for each Convex team. `state: Convex.state({ team })` keeps the state of every
+stack and stage of the team in the production deployment of the project `alchemy-state`, which the
+first run creates. The `alchemyState` component, `@samebase/alchemy-convex/convex.config`, and
+`CONVEX_STATE_DEPLOY_KEY` are gone, so a repository holds one secret, the team token, and a stack
+can create and destroy its own project.
+
+- The store functions are internal and pushed by the package itself, from `src/store/convex`, with
+  the Convex CLI of the app, when `state:version` is missing or older. A newer store serves an
+  older package as it is and is never replaced. Every function keeps its name; `version` is new,
+  and `stacks` and `stages` also list a stage that has only an output.
+- Each run gets a deploy key of the store deployment with
+  `deployment:functions:runInternalQueries` and `runInternalMutations` only, deleted at the end of
+  the run, and replaced once when a call gets HTTP 401 or 403. A reader of the index needs
+  `runInternalQueries`; `deployment:data:view` does not run an internal function.
+- Two first runs of a team that both create `alchemy-state` end on the oldest project: the other
+  run deletes its own empty project.
+- `Convex.state({ team })` takes the team, like `Convex.Project`. The 0.5.0 state in an
+  `alchemyState` component is not read: run the first deploy with `--adopt` so that the resources
+  of the stack are taken over.
+- `withPushKey` takes the key actions, and `createDeployKey`, `deleteDeployKey`, `installedCli`,
+  `findProjectByName`, `getProjectById`, `prodDeploymentOf`, and `createProject` are exported from
+  their modules for the store.
+
 ## 0.5.0 (2026-10-20)
 
 Alchemy state in Convex. `state: Convex.state()` keeps the stack's state in an `alchemyState`

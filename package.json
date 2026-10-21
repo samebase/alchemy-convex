@@ -1,6 +1,6 @@
 {
   "name": "@samebase/alchemy-convex",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "The Convex plane for Alchemy v2: projects, deployments, environment variables, and the push of the functions",
   "keywords": [
     "alchemy",
@@ -31,8 +31,7 @@
     ".": {
       "types": "./lib/index.d.ts",
       "import": "./lib/index.js"
-    },
-    "./convex.config": "./src/component/convex.config.ts"
+    }
   },
   "publishConfig": {
     "access": "public"

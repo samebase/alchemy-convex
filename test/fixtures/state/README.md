@@ -1,18 +1,23 @@
 # Recorded function API payloads
 
-Captured on 2026-10-20 against the temporary project `tmp-ea1d03a3-convex-state` in team `nicu`
-(production deployment `fine-cow-747`), after the first `alchemy deploy --stage main` of the proof
-stack. The project was deleted after the proof. Ids are real and harmless. No file contains a key.
+Captured on 2026-10-21 against the temporary project `tmp-44ce-state-probe` in team `nicu`
+(production deployment `prestigious-marlin-188`), after a push of `src/store/convex` with
+`convex deploy --typecheck disable --codegen disable`. The project was deleted after the proof.
+Ids are real and harmless. No file contains a key.
 
 | File | Request |
 | --- | --- |
-| url_for_key.json | POST https://api.convex.dev/api/deployment/url_for_key |
-| components_list_empty.json | POST /api/query `_system/frontend/components:list` on a deployment with no code |
-| components_list_active.json | the same with `alchemyState` mounted |
-| components_list_unmounted.json | the same after a push without the mount (dev deployment) |
-| function_list.json | POST /api/function `state:list` with `componentPath: "alchemyState"` |
-| function_get.json | POST /api/function `state:get` of the row that the run wrote |
-| function_get_absent.json | POST /api/function `state:get` of a row that does not exist |
-| function_not_permitted.json | POST /api/function `state:remove` with a key that has only `deployment:data:view` |
+| function_version.json | POST /api/function `state:version` with a key that has `deployment:functions:runInternalQueries` |
+| function_version_missing.json | POST /api/function for a function that the deployment does not have |
 | function_no_key.json | POST /api/function without a key (403) |
-| function_component_missing.json | POST /api/function on a deployment with no code (500) |
+| function_not_permitted.json | POST /api/function `state:set` with a key that has only `deployment:functions:runInternalQueries` |
+| function_set.json | POST /api/function `state:set` with a key that has `deployment:functions:runInternalMutations` |
+| function_get.json | POST /api/function `state:get` of the row that `state:set` wrote |
+| function_get_absent.json | POST /api/function `state:get` of a row that does not exist |
+| function_stacks.json | POST /api/function `state:stacks` |
+| public_mutation_no_key.json | POST /api/mutation `state:set` without a key, while the store still had public functions (200): the reason every function is internal |
+
+Facts learned: `deployment:data:view` and `deployment:data:write` do not run an internal function
+(the reply names `deployment:functions:runInternalQueries` or `runInternalMutations`). An internal
+function through `/api/query` without a key answers a bare "Server Error". A deploy key must expire
+at least 30 minutes after its creation (`InvalidExpiresAt`).

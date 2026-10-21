@@ -1,0 +1,8 @@
+{
+  "name": "alchemy-state",
+  "private": true,
+  "type": "module",
+  "peerDependencies": {
+    "convex": "^1.46.0"
+  }
+}

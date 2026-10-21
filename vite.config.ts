@@ -2,11 +2,11 @@ import { defineConfig } from "vite-plus";
 
 export default defineConfig({
   fmt: {
-    // Convex codegen writes src/component/_generated.
-    ignorePatterns: ["test/fixtures/**", "src/component/_generated/**"],
+    // Convex codegen writes src/store/convex/_generated.
+    ignorePatterns: ["test/fixtures/**", "src/store/convex/_generated/**"],
   },
   lint: {
-    ignorePatterns: ["test/fixtures/**", "src/component/_generated/**"],
+    ignorePatterns: ["test/fixtures/**", "src/store/convex/_generated/**"],
     options: { typeAware: true },
   },
   test: {

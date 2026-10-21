@@ -25,7 +25,12 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type { components } from "@convex-dev/platform/managementApi";
 import { shouldAdopt } from "./Adoption.ts";
-import { absentAsUndefined, ConvexApiError, ManagementApi } from "./ManagementApi.ts";
+import {
+  absentAsUndefined,
+  ConvexApiError,
+  ManagementApi,
+  type ManagementApiService,
+} from "./ManagementApi.ts";
 import type { Providers } from "./Providers.ts";
 
 /** Region names the Management API accepts, from the generated schema. */
@@ -159,6 +164,8 @@ const DeploymentRow = Schema.Struct({
   deploymentType: Schema.String,
   isDefault: Schema.Boolean,
   deploymentUrl: Schema.String,
+  /** Absent or null until the first push. */
+  lastDeployTime: Schema.optionalKey(Schema.NullOr(Schema.Number)),
 });
 const DeploymentRows = Schema.Array(DeploymentRow);
 
@@ -202,29 +209,123 @@ const isTeamOf = (details: ProjectDetails, team: string | number) =>
     ? details.teamId === Number(team)
     : details.teamSlug === team;
 
+/** The row of the project's default production deployment, or undefined. */
+export const prodDeploymentOf = (api: ManagementApiService, projectId: number) =>
+  api
+    .request("list deployments", (client) =>
+      client.GET("/projects/{project_id}/list_deployments", {
+        params: { path: { project_id: projectId } },
+      }),
+    )
+    .pipe(
+      Effect.map((rows) =>
+        Schema.decodeUnknownSync(DeploymentRows)(rows).find(
+          (row) => row.deploymentType === "prod" && row.isDefault,
+        ),
+      ),
+    );
+
+/** GET /projects/{id}, or undefined after a 404. */
+export const getProjectById = (api: ManagementApiService, projectId: number) =>
+  absentAsUndefined(
+    api.request("get project", (client) =>
+      client.GET("/projects/{project_id}", { params: { path: { project_id: projectId } } }),
+    ),
+  ).pipe(
+    Effect.map((body) =>
+      body === undefined ? undefined : Schema.decodeUnknownSync(ProjectDetails)(body),
+    ),
+  );
+
+/**
+ * Every project in the team with exactly this name, in the order of the
+ * listing. Reads every page. `q` narrows the listing on the server, and the
+ * exact match here decides. Pattern from Confect
+ * `packages/alchemy/src/ConvexClient.ts` and `Project.ts`
+ * (https://github.com/rjdellecese/confect, ISC license).
+ */
+export const listProjectsByName = (api: ManagementApiService, teamId: number, name: string) =>
+  Effect.gen(function* () {
+    const matches: ProjectDetails[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+    while (true) {
+      const body = yield* api.request("list projects", (client) =>
+        client.GET("/teams/{team_id}/projects", {
+          params: {
+            path: { team_id: teamId },
+            query: { q: name, ...(cursor === undefined ? {} : { cursor }) },
+          },
+        }),
+      );
+      const page = Schema.decodeUnknownSync(ProjectPage)(body);
+      matches.push(...page.items.filter((row) => row.name === name));
+      if (!page.pagination.hasMore) break;
+      const next = page.pagination.nextCursor;
+      if (next === undefined || next === null || seenCursors.has(next)) {
+        return yield* new ConvexApiError({
+          operation: "list projects",
+          status: 0,
+          code: "InvalidPagination",
+          message: `The project listing of team ${teamId} reports more pages but gives no new cursor. Convex.Project stops so that it does not miss a project named "${name}".`,
+        });
+      }
+      seenCursors.add(next);
+      cursor = next;
+    }
+    return matches;
+  });
+
+/** The one project in the team with exactly this name, or undefined. More than one is an error. */
+export const findProjectByName = (api: ManagementApiService, teamId: number, name: string) =>
+  listProjectsByName(api, teamId, name).pipe(
+    Effect.flatMap((matches) =>
+      matches.length > 1
+        ? new AmbiguousProject({ teamId, name, projectIds: matches.map((row) => row.id) })
+        : Effect.succeed(matches[0]),
+    ),
+  );
+
+/**
+ * POST /teams/{team_id}/create_project, then GET /projects/{id}. The identity
+ * comes from the create response, never from a name lookup.
+ */
+export const createProject = (
+  api: ManagementApiService,
+  teamId: number,
+  props: {
+    readonly name: string;
+    readonly deploymentType: "prod" | "dev";
+    readonly deploymentRegion: DeploymentRegion | undefined;
+  },
+) =>
+  Effect.gen(function* () {
+    const created = yield* api.request("create project", (client) =>
+      client.POST("/teams/{team_id}/create_project", {
+        params: { path: { team_id: teamId } },
+        body: {
+          projectName: props.name,
+          deploymentType: props.deploymentType,
+          ...(props.deploymentRegion === undefined
+            ? {}
+            : { deploymentRegion: props.deploymentRegion }),
+        },
+      }),
+    );
+    const { projectId } = Schema.decodeUnknownSync(CreatedProject)(created);
+    const details = yield* getProjectById(api, projectId);
+    if (details === undefined) return yield* new CreatedProjectNotFound({ projectId });
+    return details;
+  });
+
 export const ProjectProvider = () =>
   Provider.effect(
     Project,
     Effect.gen(function* () {
       const api = yield* ManagementApi;
 
-      const prodDeployment = (projectId: number) =>
-        api
-          .request("list deployments", (client) =>
-            client.GET("/projects/{project_id}/list_deployments", {
-              params: { path: { project_id: projectId } },
-            }),
-          )
-          .pipe(
-            Effect.map((rows) =>
-              Schema.decodeUnknownSync(DeploymentRows)(rows).find(
-                (row) => row.deploymentType === "prod" && row.isDefault,
-              ),
-            ),
-          );
-
       const attributesOf = (details: ProjectDetails) =>
-        prodDeployment(details.id).pipe(
+        prodDeploymentOf(api, details.id).pipe(
           Effect.map((prod): ProjectAttributes => ({
             projectId: details.id,
             slug: details.slug,
@@ -235,16 +336,7 @@ export const ProjectProvider = () =>
           })),
         );
 
-      const getById = (projectId: number) =>
-        absentAsUndefined(
-          api.request("get project", (client) =>
-            client.GET("/projects/{project_id}", { params: { path: { project_id: projectId } } }),
-          ),
-        ).pipe(
-          Effect.map((body) =>
-            body === undefined ? undefined : Schema.decodeUnknownSync(ProjectDetails)(body),
-          ),
-        );
+      const getById = (projectId: number) => getProjectById(api, projectId);
 
       /** The project with this slug in the team, or undefined. Official endpoint; the team can be a slug. */
       const getBySlug = (team: string | number, slug: string) =>
@@ -260,51 +352,7 @@ export const ProjectProvider = () =>
           ),
         );
 
-      /**
-       * The one project in the team with exactly this name, or undefined.
-       * Reads every page. `q` narrows the listing on the server, and the
-       * exact match here decides. Pattern from Confect
-       * `packages/alchemy/src/ConvexClient.ts` and `Project.ts`
-       * (https://github.com/rjdellecese/confect, ISC license).
-       */
-      const findByName = (teamId: number, name: string) =>
-        Effect.gen(function* () {
-          const matches: ProjectDetails[] = [];
-          const seenCursors = new Set<string>();
-          let cursor: string | undefined;
-          while (true) {
-            const body = yield* api.request("list projects", (client) =>
-              client.GET("/teams/{team_id}/projects", {
-                params: {
-                  path: { team_id: teamId },
-                  query: { q: name, ...(cursor === undefined ? {} : { cursor }) },
-                },
-              }),
-            );
-            const page = Schema.decodeUnknownSync(ProjectPage)(body);
-            matches.push(...page.items.filter((row) => row.name === name));
-            if (!page.pagination.hasMore) break;
-            const next = page.pagination.nextCursor;
-            if (next === undefined || next === null || seenCursors.has(next)) {
-              return yield* new ConvexApiError({
-                operation: "list projects",
-                status: 0,
-                code: "InvalidPagination",
-                message: `The project listing of team ${teamId} reports more pages but gives no new cursor. Convex.Project stops so that it does not miss a project named "${name}".`,
-              });
-            }
-            seenCursors.add(next);
-            cursor = next;
-          }
-          if (matches.length > 1) {
-            return yield* new AmbiguousProject({
-              teamId,
-              name,
-              projectIds: matches.map((row) => row.id),
-            });
-          }
-          return matches[0];
-        });
+      const findByName = (teamId: number, name: string) => findProjectByName(api, teamId, name);
 
       /**
        * Brings an existing project to the desired name. The team cannot
@@ -458,22 +506,11 @@ export const ProjectProvider = () =>
               return yield* converge(existing, teamId, news.name);
             }
           }
-          const created = yield* api.request("create project", (client) =>
-            client.POST("/teams/{team_id}/create_project", {
-              params: { path: { team_id: teamId } },
-              body: {
-                projectName: news.name,
-                deploymentType: news.deploymentType ?? "prod",
-                ...(news.deploymentRegion === undefined
-                  ? {}
-                  : { deploymentRegion: news.deploymentRegion }),
-              },
-            }),
-          );
-          // Identity comes from the create response, never from a name lookup.
-          const { projectId } = Schema.decodeUnknownSync(CreatedProject)(created);
-          const details = yield* getById(projectId);
-          if (details === undefined) return yield* new CreatedProjectNotFound({ projectId });
+          const details = yield* createProject(api, teamId, {
+            name: news.name,
+            deploymentType: news.deploymentType ?? "prod",
+            deploymentRegion: news.deploymentRegion,
+          });
           return yield* converge(details, teamId, news.name);
         }),
 
