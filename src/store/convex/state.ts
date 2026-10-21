@@ -223,7 +223,9 @@ export const setOutput = internalMutation({
  * resources in fqn order and its output, as the JSON texts that the rows
  * hold. A stage with an output and no resource is listed with an empty
  * resource list; a stage with resources and no output with `output: null`.
- * Since store version 2.
+ * One function reads at most 16 MiB (Convex limit): a stack whose rows go
+ * beyond that fails here and is read with `stages`, `list`, `get`, and
+ * `getOutput` instead. Since store version 2.
  */
 export const readStack = internalQuery({
   args: { stack: v.string() },

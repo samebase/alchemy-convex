@@ -287,9 +287,43 @@ describe("Convex.state", () => {
     const own = { url: "u", [RUN_RECORD_KEY]: { mine: true } };
     await run(service.setOutput({ ...stack, stage: "pr-1", value: own }));
     expect(await run(service.getOutput({ ...stack, stage: "pr-1" }))).toEqual(own);
-    // An output that is not an object has no place for the record.
+    // An output that is not a plain object has no place for the record.
     await run(service.setOutput({ ...stack, stage: "pr-2", value: "u" }));
     expect(await run(service.getOutput({ ...stack, stage: "pr-2" }))).toBe("u");
+  });
+
+  it("reads, writes, and destroys without a record, when the checkout gives none", async () => {
+    const fake = new FakeConvex().install();
+    const deployment =
+      fake.project(fake.addProject({ name: STORE_PROJECT_NAME, teamId: TEAM }))
+        ?.prodDeploymentName ?? "";
+    fake.addStore(deployment, STORE_VERSION);
+    // The layer in a directory that is no git checkout, outside GitHub Actions
+    // (CI sets GITHUB_ACTIONS): the record is logged, not required.
+    vi.stubEnv("GITHUB_ACTIONS", "");
+    const cwd = process.cwd();
+    process.chdir(dir);
+    try {
+      const service = await run(
+        Effect.gen(function* () {
+          return yield* yield* State;
+        }).pipe(
+          Effect.provide(state({ team: TEAM })),
+          Effect.provide(NodeServices.layer),
+          Effect.provide(
+            ConfigProvider.layer(ConfigProvider.fromEnvRecord({ CONVEX_ACCESS_TOKEN: TOKEN })),
+          ),
+          Effect.scoped,
+        ),
+      );
+      await run(service.set({ ...stack, fqn: "Project", value: created("Project") }));
+      await run(service.setOutput({ ...stack, value: { url: "u" } }));
+      expect(await run(service.getOutput(stack))).toEqual({ url: "u" });
+      await run(service.deleteStack({ stack: "samebase/app" }));
+      expect(await run(service.listStacks())).toEqual([]);
+    } finally {
+      process.chdir(cwd);
+    }
   });
 
   it("upgrades a 0.6.1 store in place: the old names answer the same rows, and readStack is new", async () => {

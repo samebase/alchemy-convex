@@ -187,14 +187,21 @@ const fromGit = (where: RunEnvironment) =>
 export const runRecord = (where: RunEnvironment): Effect.Effect<RunRecord, RunRecordError> =>
   where.env["GITHUB_ACTIONS"] === "true" ? fromGitHubActions(where) : fromGit(where);
 
+/** A plain object, which a spread keeps whole. A Date, a Duration, or a Redacted value is an object too, and a spread loses it. */
+const isPlainObject = (value: unknown): value is Record<string, unknown> => {
+  if (typeof value !== "object" || value === null) return false;
+  const prototype: unknown = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+};
+
 /**
  * The output document of a stage: the stack's output plus the record under
  * {@link RUN_RECORD_KEY}, or undefined for an output with no place for the
- * key (a string, an array, null). A value that the stack itself put under
- * the key stays.
+ * key: a string, an array, null, or an object that is not plain, such as a
+ * Date. A value that the stack itself put under the key stays.
  */
 export const withRunRecord = (output: unknown, record: RunRecord): object | undefined =>
-  typeof output === "object" && output !== null && !Array.isArray(output)
+  isPlainObject(output)
     ? RUN_RECORD_KEY in output
       ? output
       : { ...output, [RUN_RECORD_KEY]: record }

@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { RUN_RECORD_KEY, type RunRecord, runRecord, withRunRecord } from "../src/RunRecord.ts";
@@ -198,5 +199,9 @@ describe("withRunRecord", () => {
     expect(withRunRecord("https://app.convex.site", record)).toBeUndefined();
     expect(withRunRecord(["a"], record)).toBeUndefined();
     expect(withRunRecord(null, record)).toBeUndefined();
+    // A spread would keep only the enumerable own keys of these.
+    expect(withRunRecord(new Date(0), record)).toBeUndefined();
+    expect(withRunRecord(Redacted.make("secret"), record)).toBeUndefined();
+    expect(withRunRecord(Object.create(null), record)).toEqual({ [RUN_RECORD_KEY]: record });
   });
 });

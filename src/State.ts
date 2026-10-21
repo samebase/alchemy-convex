@@ -248,8 +248,8 @@ export interface StoreOptions {
   readonly scope: Scope.Scope;
   /** The functions directory that an outdated store gets: {@link storeDirectory}. */
   readonly store: string;
-  /** The record of this run, which `setOutput` adds to the stage output with the time of the write. */
-  readonly run: RunRecord;
+  /** The record of this run, which `setOutput` adds to the stage output with the time of the write, or undefined for a run without one. */
+  readonly run: RunRecord | undefined;
 }
 
 /**
@@ -394,6 +394,21 @@ export const makeConvexState = (options: StoreOptions) =>
     }
 
     const remote = remoteOf(functions);
+    /** The stack's output plus the record, when the run has one and the output has a place for it. */
+    const documentOf = (request: { stack: string; stage: string; value: unknown }) =>
+      Effect.gen(function* () {
+        const { run } = options;
+        if (run === undefined) return request.value;
+        const recordedAt = new Date(yield* Clock.currentTimeMillis).toISOString();
+        const document = withRunRecord(request.value, { ...run, recordedAt });
+        if (document === undefined) {
+          yield* Effect.logWarning(
+            `Convex state: the output of ${request.stack}/${request.stage} is not a plain object, so it carries no run record.`,
+          );
+          return request.value;
+        }
+        return document;
+      });
     const service: StateService = {
       id: "convex",
       getVersion: () => Effect.succeed(STATE_STORE_VERSION),
@@ -409,14 +424,7 @@ export const makeConvexState = (options: StoreOptions) =>
       // The document is the stack's output plus the record under `samebase.run`.
       setOutput: (request) =>
         Effect.gen(function* () {
-          const recordedAt = new Date(yield* Clock.currentTimeMillis).toISOString();
-          const document = withRunRecord(request.value, { ...options.run, recordedAt });
-          if (document === undefined) {
-            yield* Effect.logWarning(
-              `Convex state: the output of ${request.stack}/${request.stage} is not an object, so it carries no run record.`,
-            );
-          }
-          const value = document ?? request.value;
+          const value = yield* documentOf(request);
           yield* remote.setOutput({ stack: request.stack, stage: request.stage, value });
           return value;
         }),
@@ -447,9 +455,18 @@ export const state = (
           const api = yield* ManagementApi.pipe(
             Effect.provide(ManagementApiLive().pipe(Layer.provide(fromConfig()))),
           );
-          // The record comes before the first read, so a checkout that gives
-          // none stops the run before it changes anything.
-          const run = yield* runRecord({ cwd: process.cwd(), env: process.env });
+          // The record is derived once, before the first read. A checkout
+          // that gives none, such as a tarball without git, a checkout
+          // without origin, or a detached HEAD, still reads, plans, and
+          // destroys: its outputs are written without the record, and the
+          // log says why.
+          const run = yield* runRecord({ cwd: process.cwd(), env: process.env }).pipe(
+            Effect.catch((error) =>
+              Effect.logWarning(
+                `Convex state: the stage outputs of this run carry no record. ${error.message}`,
+              ).pipe(Effect.as(undefined)),
+            ),
+          );
           return yield* makeConvexState({
             team: options.team,
             api,

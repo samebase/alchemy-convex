@@ -84,14 +84,18 @@ successful apply (`alchemy/Apply.ts`, `state.setOutput` after `Output.evaluate`)
 - Placement: `Convex.state()` wraps `setOutput`. The stored document is the stack's output plus the
   reserved key `samebase.run`; the stack's own keys stay as they are, and a value that the stack
   itself put under `samebase.run` wins. `getOutput` returns the document as stored: the reader strips
-  nothing. An output that is not a plain object (a string, an array) has no place for the key and is
+  nothing, and a stack that spreads the whole output of another stack into its props sees the key
+  and a new `recordedAt` after every deploy; such a stack reads the named outputs. An output that is
+  not a plain object (a string, an array, a Date, a Redacted value) has no place for the key and is
   stored as it is, with a warning in the log. The record needs no store function, so this part keeps
   the wire names of version 1.
 - The record, version 1: `{ version: 1, repository, stackFile, branch, pullRequest, headCommit,
   runUrl, source, recordedAt }`, no secret. `src/RunRecord.ts` derives it with no Convex dependency,
-  so any state layer can add it. The derivation runs at the first use of the state, before the first
-  read, so a checkout that gives no record stops the run before it changes anything; `recordedAt` is
-  the time of the write.
+  so any state layer can add it. The derivation runs once, at the first use of the state;
+  `recordedAt` is the time of the write. A checkout that gives no record (a tarball without git, no
+  `origin` remote, a detached HEAD) still reads, plans, and destroys: the first use logs the reason,
+  and the outputs of that run carry no record. A reader treats a missing `samebase.run` as an unknown
+  run, which it does for every output written before 0.7.0 anyway.
 
 | Field         | GitHub Actions (`GITHUB_ACTIONS` is `true`)                                                                              | Laptop                                                                               |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
@@ -105,7 +109,9 @@ successful apply (`alchemy/Apply.ts`, `state.setOutput` after `Output.evaluate`)
 
 - `headCommit` on a pull request event is the head of the pull request, not `GITHUB_SHA`, which is
   the merge commit that no branch holds: the head is what GitHub's run reports as `head_sha` and what
-  a person sees on the pull request.
+  a person sees on the pull request. The tree that `actions/checkout` deploys by default is that
+  merge commit, so the base of the pull request at that moment is not in the record; `runUrl` names
+  the run that has it.
 - `stackFile` assumes the default name. The alchemy CLI resolves `--config` against the working
   directory (`alchemy/src/Alchemist/Entrypoint.ts`) and keeps it in the session, not in the
   `StackServices` or `AlchemyContext` that a state layer sees, so the record takes the working
@@ -116,14 +122,15 @@ successful apply (`alchemy/Apply.ts`, `state.setOutput` after `Output.evaluate`)
   order, values as the JSON texts of the rows, `output: null` for a stage without one. It is a new
   function, so `STORE_VERSION` is 2: the first run of 0.7.0 in a team pushes the store in place, the
   path that 0.6.0 measured. The rows and the names of version 1 stay (unit test: a version 1 store
-  with rows answers the old names unchanged after the upgrade, and `readStack` after it).
+  with rows answers the old names unchanged after the upgrade, and `readStack` after it). One
+  function reads at most 16 MiB (Convex limit); the measured rows are a few KB each, and a stack
+  beyond the limit is read with the per-stage functions.
 
 Limits of the record: a failed deploy leaves the previous record, and a deploy of selected resources
 (`alchemy deploy <fqn>`) writes none, because the engine writes the output only after a full
 successful apply. The record therefore describes the last full successful deploy of the stage, which
 is what the resources of the stage reflect; the failed run is GitHub's fact. A dirty laptop tree is
-recorded by its last commit. A laptop run now needs a branch and an `origin` remote with
-`owner/name`; a checkout without one stops at the first state read with the reason.
+recorded by its last commit.
 
 ## Measured
 
