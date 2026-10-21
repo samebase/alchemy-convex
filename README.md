@@ -92,24 +92,29 @@ values explicitly: `Convex.providers(Convex.fromValues({ accessToken, deployKey 
 
 ## State in Convex
 
-`state: Convex.state()` keeps the Alchemy state of every stage in the production deployment of the
-project, so the stack needs no Cloudflare token.
-[docs/design/convex-state.md](docs/design/convex-state.md) records the decisions.
+`state: Convex.state({ team })` keeps the Alchemy state of every stack and stage of a Convex team in
+one project of that team, `alchemy-state`, so a repository holds one secret and a stack can create
+and destroy its own project. [docs/design/convex-state.md](docs/design/convex-state.md) records the
+decisions and the measurements.
 
-1. Mount the state component in `convex/convex.config.ts` with its default name:
+```ts
+export default Alchemy.Stack(
+  process.env["GITHUB_REPOSITORY"] ?? "my-org/my-app", // the stack name: the repository
+  { providers: Convex.providers(), state: Convex.state({ team: "my-team" }) },
+  Effect.gen(function* () {
+    /* ... */
+  }),
+);
+```
 
-   ```ts
-   import alchemyState from "@samebase/alchemy-convex/convex.config";
-   app.use(alchemyState);
-   ```
-
-2. Set `CONVEX_STATE_DEPLOY_KEY` in every run, a preview run too, to a production deploy key. A key
-   with only the actions `deployment:data:view` and `deployment:data:write` is sufficient.
-
-The first run starts with empty state, keeps it in memory until `Convex.Deployment` has pushed the
-component, and then writes it. A run whose push does not mount the component fails at the end.
-Rows are in the `alchemyState` component tables `resources` and `outputs` in the dashboard. The
-store has no lock: run one deploy of a stage at a time, such as with a CI concurrency group.
+Every run needs the team token in `CONVEX_ACCESS_TOKEN`, or the Convex CLI login on a laptop. The
+first run of a team creates the project `alchemy-state` and pushes the store functions to its
+production deployment with the Convex CLI of the app; a later version of this package pushes a
+newer store when it finds an older one, and never an older one over a newer one. Each run makes a
+deploy key of that deployment that can only run the store's internal functions, and deletes it at
+the end. Rows are in the tables `resources` and `outputs` in the dashboard, under the stack name.
+The store has no lock: run one deploy of a stage at a time, such as with a CI concurrency group.
+The names of the store functions are a wire contract: never renamed or removed.
 
 ## Resources
 
