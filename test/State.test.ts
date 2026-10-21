@@ -20,7 +20,15 @@ import * as Scope from "effect/Scope";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fromValues } from "../src/Credentials.ts";
 import { ManagementApi, ManagementApiLive } from "../src/ManagementApi.ts";
-import { makeConvexState, RUN_KEY_ACTIONS, state, STORE_PROJECT_NAME } from "../src/State.ts";
+import { createDeployKey } from "../src/Push.ts";
+import { RUN_RECORD_KEY, type RunRecord } from "../src/RunRecord.ts";
+import {
+  makeConvexState,
+  makeFunctionApi,
+  RUN_KEY_ACTIONS,
+  state,
+  STORE_PROJECT_NAME,
+} from "../src/State.ts";
 import { STORE_VERSION } from "../src/store/convex/version.ts";
 import { FakeConvex, recorded, stateFixture } from "./fakeConvex.ts";
 
@@ -91,14 +99,34 @@ const created = (fqn: string): CreatedResourceState => ({
   attr: { projectId: 1 },
 });
 
+/** The record of the test run, as a laptop derivation gives it; `recordedAt` is set at each write. */
+const record: RunRecord = {
+  version: 1,
+  repository: "samebase/app",
+  stackFile: "alchemy.run.ts",
+  branch: "main",
+  pullRequest: null,
+  headCommit: "8af3c5b7932c528939cbc7aa0597b1fc36c8dc83",
+  runUrl: null,
+  source: "laptop",
+  recordedAt: "unset",
+};
+
 /** The store service over the fake, with its own scope, which `close` ends. */
 const open = (team: string | number = TEAM) =>
   Effect.gen(function* () {
     const api = yield* ManagementApi;
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const scope = yield* Scope.make();
-    const service = yield* makeConvexState({ team, api, spawner, scope, store });
-    return { service, close: Scope.close(scope, Exit.void) };
+    const service = yield* makeConvexState({ team, api, spawner, scope, store, run: record });
+    /** The read that Samebase makes: a key with the query action only, straight to the function API. */
+    const read = (deployment: string, path: string, args: Record<string, string>) =>
+      createDeployKey(api, deployment, "reader", ["deployment:functions:runInternalQueries"]).pipe(
+        Effect.flatMap((key) =>
+          makeFunctionApi(`https://${deployment}.convex.cloud`, key).call(path, args),
+        ),
+      );
+    return { service, read, close: Scope.close(scope, Exit.void) };
   }).pipe(
     Effect.provide(
       ManagementApiLive().pipe(Layer.provide(fromValues({ accessToken: Redacted.make(TOKEN) }))),
@@ -152,7 +180,10 @@ describe("Convex.state", () => {
     });
     expect(await run(service.listStacks())).toEqual(["samebase/app"]);
     expect(await run(service.listStages("samebase/app"))).toEqual(["main"]);
-    expect(await run(service.getOutput(stack))).toEqual({ url: "https://app.convex.site" });
+    expect(await run(service.getOutput(stack))).toEqual({
+      url: "https://app.convex.site",
+      [RUN_RECORD_KEY]: { ...record, recordedAt: expect.stringMatching(/^2\d{3}-\d\d-\d\dT/) },
+    });
     expect(fake.functionCalls.filter((line) => !line.endsWith("state:version"))).toEqual([
       `${deployment} state:set`,
       `${deployment} state:setOutput`,
@@ -229,6 +260,101 @@ describe("Convex.state", () => {
     const newer = await run(open());
     expect(await run(runs())).toHaveLength(1);
     expect(await run(newer.service.listStacks())).toEqual([]);
+  });
+
+  it("stores the stack output with the run record, and the stack's own value under the key", async () => {
+    const fake = new FakeConvex().install();
+    const deployment =
+      fake.project(fake.addProject({ name: STORE_PROJECT_NAME, teamId: TEAM }))
+        ?.prodDeploymentName ?? "";
+    const store = fake.addStore(deployment, STORE_VERSION);
+    const { service, read } = await run(open());
+
+    const stored = await run(service.setOutput({ ...stack, value: { url: "u" } }));
+    const document = JSON.parse(store.outputs.get("samebase/app/main") ?? "");
+    expect(document).toEqual({
+      url: "u",
+      [RUN_RECORD_KEY]: { ...record, recordedAt: expect.stringMatching(/Z$/) },
+    });
+    expect(stored).toEqual(document);
+    // The reader gets the document as stored, through the function API.
+    expect(await run(read(deployment, "state:getOutput", stack))).toMatchObject({
+      status: "success",
+      value: JSON.stringify(document),
+    });
+
+    // A value that the stack itself put under the key stays.
+    const own = { url: "u", [RUN_RECORD_KEY]: { mine: true } };
+    await run(service.setOutput({ ...stack, stage: "pr-1", value: own }));
+    expect(await run(service.getOutput({ ...stack, stage: "pr-1" }))).toEqual(own);
+    // An output that is not a plain object has no place for the record.
+    await run(service.setOutput({ ...stack, stage: "pr-2", value: "u" }));
+    expect(await run(service.getOutput({ ...stack, stage: "pr-2" }))).toBe("u");
+  });
+
+  it("reads, writes, and destroys without a record, when the checkout gives none", async () => {
+    const fake = new FakeConvex().install();
+    const deployment =
+      fake.project(fake.addProject({ name: STORE_PROJECT_NAME, teamId: TEAM }))
+        ?.prodDeploymentName ?? "";
+    fake.addStore(deployment, STORE_VERSION);
+    // The layer in a directory that is no git checkout, outside GitHub Actions
+    // (CI sets GITHUB_ACTIONS): the record is logged, not required.
+    vi.stubEnv("GITHUB_ACTIONS", "");
+    const cwd = process.cwd();
+    process.chdir(dir);
+    try {
+      const service = await run(
+        Effect.gen(function* () {
+          return yield* yield* State;
+        }).pipe(
+          Effect.provide(state({ team: TEAM })),
+          Effect.provide(NodeServices.layer),
+          Effect.provide(
+            ConfigProvider.layer(ConfigProvider.fromEnvRecord({ CONVEX_ACCESS_TOKEN: TOKEN })),
+          ),
+          Effect.scoped,
+        ),
+      );
+      await run(service.set({ ...stack, fqn: "Project", value: created("Project") }));
+      await run(service.setOutput({ ...stack, value: { url: "u" } }));
+      expect(await run(service.getOutput(stack))).toEqual({ url: "u" });
+      await run(service.deleteStack({ stack: "samebase/app" }));
+      expect(await run(service.listStacks())).toEqual([]);
+    } finally {
+      process.chdir(cwd);
+    }
+  });
+
+  it("upgrades a 0.6.1 store in place: the old names answer the same rows, and readStack is new", async () => {
+    const fake = new FakeConvex().install();
+    const deployment =
+      fake.project(fake.addProject({ name: STORE_PROJECT_NAME, teamId: TEAM }))
+        ?.prodDeploymentName ?? "";
+    // The rows that 0.6.1 wrote, in a store of version 1, which has no readStack.
+    const store = fake.addStore(deployment, 1);
+    const project = JSON.stringify(created("Project"));
+    store.rows.push({ ...stack, fqn: "Project", value: project });
+    store.rows.push({ ...stack, stage: "pr-1", fqn: "Project", value: project });
+    store.outputs.set("samebase/app/main", '{"url":"u"}');
+
+    const { service, read } = await run(open());
+    expect(await run(runs())).toHaveLength(1);
+    expect(store.version).toBe(STORE_VERSION);
+    expect(await run(service.listStacks())).toEqual(["samebase/app"]);
+    expect(await run(service.listStages("samebase/app"))).toEqual(["main", "pr-1"]);
+    expect(await run(service.list(stack))).toEqual(["Project"]);
+    expect(await run(service.get({ ...stack, fqn: "Project" }))).toEqual(created("Project"));
+    expect(await run(service.getOutput(stack))).toEqual({ url: "u" });
+    expect(await run(read(deployment, "state:readStack", { stack: "samebase/app" }))).toEqual({
+      status: "success",
+      value: {
+        stages: [
+          { stage: "main", resources: [{ fqn: "Project", value: project }], output: '{"url":"u"}' },
+          { stage: "pr-1", resources: [{ fqn: "Project", value: project }], output: null },
+        ],
+      },
+    });
   });
 
   it("keeps one store when two first runs create the project at the same time", async () => {

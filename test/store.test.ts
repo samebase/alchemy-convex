@@ -86,4 +86,40 @@ describe("alchemy-state", () => {
     expect(await t.query(internal.state.stacks, {})).toEqual([]);
     expect(await t.query(internal.state.getOutput, main)).toBeNull();
   });
+
+  it("reads every stage of a stack in one call, in stage and fqn order", async () => {
+    const t = convexTest(schema, modules);
+    expect(await t.query(internal.state.readStack, { stack: "samebase/app" })).toEqual({
+      stages: [],
+    });
+    await t.mutation(internal.state.set, { ...preview, fqn: "B", value: '{"b":1}' });
+    await t.mutation(internal.state.set, { ...main, fqn: "B", value: '{"b":0}' });
+    await t.mutation(internal.state.set, { ...main, fqn: "A", value: '{"a":0}' });
+    await t.mutation(internal.state.setOutput, { ...main, value: '{"url":"u"}' });
+    await t.mutation(internal.state.setOutput, {
+      stack: "samebase/app",
+      stage: "empty",
+      value: '{"url":"e"}',
+    });
+    await t.mutation(internal.state.set, {
+      stack: "samebase/other",
+      stage: "main",
+      fqn: "A",
+      value: "{}",
+    });
+    expect(await t.query(internal.state.readStack, { stack: "samebase/app" })).toEqual({
+      stages: [
+        { stage: "empty", resources: [], output: '{"url":"e"}' },
+        {
+          stage: "main",
+          resources: [
+            { fqn: "A", value: '{"a":0}' },
+            { fqn: "B", value: '{"b":0}' },
+          ],
+          output: '{"url":"u"}',
+        },
+        { stage: "pr-1", resources: [{ fqn: "B", value: '{"b":1}' }], output: null },
+      ],
+    });
+  });
 });

@@ -28,6 +28,13 @@ export {
   ProjectTeamChange,
 } from "./Project.ts";
 export { Providers, providers } from "./Providers.ts";
+export {
+  RUN_RECORD_KEY,
+  type RunRecord,
+  RunRecordError,
+  runRecord,
+  withRunRecord,
+} from "./RunRecord.ts";
 export { state, STORE_PROJECT_NAME } from "./State.ts";
 export {
   CodePushFailed,
