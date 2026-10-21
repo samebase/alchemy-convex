@@ -119,6 +119,37 @@ the end. Rows are in the tables `resources` and `outputs` in the dashboard, unde
 The store has no lock: run one deploy of a stage at a time, such as with a CI concurrency group.
 The names of the store functions are a wire contract: never renamed or removed.
 
+### What the output records about a run
+
+Alchemy state holds no time, commit, branch, or run. `Convex.state()` adds them to the stage output:
+the document that `setOutput` stores is the stack's output plus the key `samebase.run`. On GitHub
+Actions the record comes from the run's variables and the event payload; on a laptop from git, which
+needs a branch and an `origin` remote. It holds no secret.
+
+```json
+{
+  "convexUrl": "https://modest-guanaco-252.convex.cloud",
+  "samebase.run": {
+    "version": 1,
+    "repository": "samebase/base-alchemy",
+    "stackFile": "alchemy.run.ts",
+    "branch": "feature",
+    "pullRequest": 42,
+    "headCommit": "8af3c5b7932c528939cbc7aa0597b1fc36c8dc83",
+    "runUrl": "https://github.com/samebase/base-alchemy/actions/runs/12345678901/attempts/1",
+    "source": "github-actions",
+    "recordedAt": "2026-10-21T10:00:00.000Z"
+  }
+}
+```
+
+`stackFile` is the working directory of the run below the repository root plus `alchemy.run.ts`.
+`pullRequest` and `runUrl` are `null` for a push and for a laptop, where `source` is `laptop`. A
+value that the stack itself returns under `samebase.run` stays. Alchemy writes the output once after
+a full successful deploy, so a failed deploy leaves the previous record, and a deploy of selected
+resources writes none. A reader gets every stage of a stack, with its resources and output, from the
+store function `state:readStack({ stack })` in one call.
+
 ## Resources
 
 - `Convex.Project`: `{ team, name, deploymentRegion?, deploymentType? }` creates a project with its

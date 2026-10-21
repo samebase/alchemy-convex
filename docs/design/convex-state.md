@@ -74,6 +74,57 @@ reads.
   team, and no app push maintains its code") rested on deploy keys only, with no team token. With
   the team token, the run mints its own keys, and the package pushes the store code itself.
 
+## Decision: the run record in the stage output (0.7.0)
+
+Alchemy state holds no time, author, commit, branch, or run; the only "when" is the content hash
+(measured in the Samebase research `research/2026-10-21-alchemy-state-rows-for-workers-and-convex.md`,
+sections 4 and 6, which this section follows). The engine writes the stage output once, after a full
+successful apply (`alchemy/Apply.ts`, `state.setOutput` after `Output.evaluate`).
+
+- Placement: `Convex.state()` wraps `setOutput`. The stored document is the stack's output plus the
+  reserved key `samebase.run`; the stack's own keys stay as they are, and a value that the stack
+  itself put under `samebase.run` wins. `getOutput` returns the document as stored: the reader strips
+  nothing. An output that is not a plain object (a string, an array) has no place for the key and is
+  stored as it is, with a warning in the log. The record needs no store function, so this part keeps
+  the wire names of version 1.
+- The record, version 1: `{ version: 1, repository, stackFile, branch, pullRequest, headCommit,
+  runUrl, source, recordedAt }`, no secret. `src/RunRecord.ts` derives it with no Convex dependency,
+  so any state layer can add it. The derivation runs at the first use of the state, before the first
+  read, so a checkout that gives no record stops the run before it changes anything; `recordedAt` is
+  the time of the write.
+
+| Field         | GitHub Actions (`GITHUB_ACTIONS` is `true`)                                                                              | Laptop                                                                               |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| `repository`  | `GITHUB_REPOSITORY`                                                                                                      | `git remote get-url origin`, the last two path segments of an https, ssh, or scp URL |
+| `stackFile`   | the working directory below `git rev-parse --show-toplevel`, plus `alchemy.run.ts`                                       | the same                                                                             |
+| `branch`      | `GITHUB_HEAD_REF` when set (pull request events), else `GITHUB_REF_NAME`                                                 | `git rev-parse --abbrev-ref HEAD`; a detached HEAD fails                             |
+| `pullRequest` | `pull_request.number` of the payload at `GITHUB_EVENT_PATH`, else `<n>` of `GITHUB_REF` `refs/pull/<n>/merge`, else null | null                                                                                 |
+| `headCommit`  | `pull_request.head.sha` of the payload, else `GITHUB_SHA`                                                                | `git rev-parse HEAD`                                                                 |
+| `runUrl`      | `${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}`                 | null                                                                                 |
+| `source`      | `github-actions`                                                                                                         | `laptop`                                                                             |
+
+- `headCommit` on a pull request event is the head of the pull request, not `GITHUB_SHA`, which is
+  the merge commit that no branch holds: the head is what GitHub's run reports as `head_sha` and what
+  a person sees on the pull request.
+- `stackFile` assumes the default name. The alchemy CLI resolves `--config` against the working
+  directory (`alchemy/src/Alchemist/Entrypoint.ts`) and keeps it in the session, not in the
+  `StackServices` or `AlchemyContext` that a state layer sees, so the record takes the working
+  directory below the git top level plus `alchemy.run.ts`. A stack file with another name is
+  recorded under the default name until Alchemy exposes the path.
+- The one-call read: `state:readStack({ stack })` answers
+  `{ stages: [{ stage, resources: [{ fqn, value }], output }] }` in stage order, resources in fqn
+  order, values as the JSON texts of the rows, `output: null` for a stage without one. It is a new
+  function, so `STORE_VERSION` is 2: the first run of 0.7.0 in a team pushes the store in place, the
+  path that 0.6.0 measured. The rows and the names of version 1 stay (unit test: a version 1 store
+  with rows answers the old names unchanged after the upgrade, and `readStack` after it).
+
+Limits of the record: a failed deploy leaves the previous record, and a deploy of selected resources
+(`alchemy deploy <fqn>`) writes none, because the engine writes the output only after a full
+successful apply. The record therefore describes the last full successful deploy of the stage, which
+is what the resources of the stage reflect; the failed run is GitHub's fact. A dirty laptop tree is
+recorded by its last commit. A laptop run now needs a branch and an `origin` remote with
+`owner/name`; a checkout without one stops at the first state read with the reason.
+
 ## Measured
 
 Proof: the public starter `samebase/base-alchemy` on a local branch, with the stack named

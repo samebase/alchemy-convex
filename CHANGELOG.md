@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.7.0 (unreleased)
+
+The stage output records its run. `Convex.state()` stores the stack's output plus the key
+`samebase.run`: `{ version: 1, repository, stackFile, branch, pullRequest, headCommit, runUrl,
+source, recordedAt }`, from the GitHub Actions variables and the event payload, or from git on a
+laptop. `getOutput` gives the document back as stored. A run on a laptop now needs a branch and an
+`origin` remote with `owner/name`; without one, the run stops at its first state read.
+
+- `src/RunRecord.ts` derives the record with no Convex dependency, so any state layer can add it.
+  `stackFile` is the working directory below the git top level plus `alchemy.run.ts`: Alchemy does
+  not expose the `--config` path to a state layer.
+- The store function `state:readStack({ stack })` answers every stage of a stack with its resources
+  and output in one call. `STORE_VERSION` is 2, so the first run of this version pushes the store in
+  place; the rows and the names of version 1 stay.
+
 ## 0.6.1 (unreleased)
 
 A team access token works. 0.6.0 resolved a team slug through the dashboard's team list, which a
