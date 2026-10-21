@@ -69,6 +69,7 @@ import {
   type EnvValue,
   keyTargetOf,
   push,
+  PUSH_KEY_ACTIONS,
   pushHash,
   type Source,
   withPushKey,
@@ -681,8 +682,14 @@ export const DeploymentProvider = () =>
               ? push(spawner, access.key, { ...options, previewName: undefined })
               : access.kind === "previewKey"
                 ? push(spawner, access.key, { ...options, previewName: target.previewName })
-                : withPushKey(access.api, target.name, news.source, (key) =>
-                    push(spawner, key, { ...options, previewName: undefined }),
+                : withPushKey(
+                    access.api,
+                    target.name,
+                    // A push command gets every action; `convex deploy` only its own.
+                    typeof news.source === "object" && news.source.command !== undefined
+                      ? undefined
+                      : PUSH_KEY_ACTIONS,
+                    (key) => push(spawner, key, { ...options, previewName: undefined }),
                   );
           yield* pushed.pipe(
             // A deployment that this reconcile created and could not push to

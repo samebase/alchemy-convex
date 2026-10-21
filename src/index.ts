@@ -28,7 +28,7 @@ export {
   ProjectTeamChange,
 } from "./Project.ts";
 export { Providers, providers } from "./Providers.ts";
-export { STATE_DEPLOY_KEY_ENV, state } from "./State.ts";
+export { state, STORE_PROJECT_NAME } from "./State.ts";
 export {
   CodePushFailed,
   ConvexAppNotFound,

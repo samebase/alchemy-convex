@@ -4,12 +4,19 @@
 // (https://<deployment>.convex.cloud/api/v1). Every response body is a
 // recorded payload from fixtures/management with only the fields that a
 // scenario needs changed.
-import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import * as Schema from "effect/Schema";
 import { vi } from "vitest";
+import { STORE_VERSION } from "../src/store/convex/version.ts";
 
 export const fixture = (file: string): unknown =>
   JSON.parse(readFileSync(new URL(`./fixtures/management/${file}`, import.meta.url), "utf8"));
+/** A recorded function API payload from fixtures/state. */
+export const stateFixture = (file: string) =>
+  Schema.decodeUnknownSync(Fields)(
+    JSON.parse(readFileSync(new URL(`./fixtures/state/${file}`, import.meta.url), "utf8")),
+  );
 
 const Fields = Schema.Record(Schema.String, Schema.Unknown);
 /** A recorded object payload as a plain record, so a scenario can derive a changed copy. */
@@ -36,7 +43,35 @@ interface Key {
   readonly id: number;
   readonly name: string;
   readonly secret: string;
+  /** The `allowedActions` of the create, or undefined for every action. */
+  readonly actions: readonly string[] | undefined;
 }
+
+/** One row of the `resources` table of the store. */
+export interface StoreRow {
+  readonly stack: string;
+  readonly stage: string;
+  readonly fqn: string;
+  readonly value: string;
+}
+
+/** The store of src/store/convex on one deployment: its version, rows, and outputs. */
+export interface Store {
+  version: number;
+  rows: StoreRow[];
+  readonly outputs: Map<string, string>;
+}
+
+/** The internal functions of the store that a query key runs, and those that need a mutation key. */
+const STORE_QUERIES = ["version", "stacks", "stages", "list", "get", "replaced", "getOutput"];
+const STORE_MUTATIONS = ["set", "remove", "removeStack", "setOutput"];
+const FunctionCall = Schema.Struct({
+  path: Schema.String,
+  args: Schema.Record(Schema.String, Schema.String),
+});
+/** One line of the fake CLI log: the hash of the key that the push got. */
+const CliRun = Schema.Struct({ keySha256: Schema.String });
+const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
 
 const RequestBody = Schema.UndefinedOr(Fields);
 const Changes = Schema.Struct({
@@ -96,6 +131,12 @@ export class FakeConvex {
   >();
   /** The deploy key that the deployment API accepts, for each deployment that has one here. */
   readonly deploymentKeys = new Map<string, string>();
+  /** The store of each deployment that has one: POST /api/function answers its functions. */
+  readonly stores = new Map<string, Store>();
+  /** The store functions that ran, as "<deployment> <path>" lines. */
+  readonly functionCalls: string[] = [];
+  /** Every deploy key secret ever created for each deployment, also the deleted ones. */
+  private readonly createdSecrets = new Map<string, string[]>();
   /** Page size of GET /teams/{team_id}/projects. */
   pageSize = 100;
   /** Rows that GET /teams/{team_id}/projects leaves out while this is above zero, one call at a time. */
@@ -137,6 +178,13 @@ export class FakeConvex {
       }),
     );
     return id;
+  }
+
+  /** Gives a deployment the store at `version`, with no rows, and returns it. */
+  addStore(deployment: string, version: number) {
+    const store: Store = { version, rows: [], outputs: new Map() };
+    this.stores.set(deployment, store);
+    return store;
   }
 
   /** The current row of a deployment, decoded. */
@@ -233,6 +281,9 @@ export class FakeConvex {
       const deployment = deploymentHost[1] ?? "";
       if (authorization.startsWith("Convex preview:")) {
         return json(403, { code: "Unauthorized", message: "Not authorized" });
+      }
+      if (url.pathname === "/api/function") {
+        return this.functionApi(deployment, authorization.replace(/^Convex /, ""), body);
       }
       const key = this.deploymentKeys.get(deployment);
       if (key !== undefined && authorization !== `Convex ${key}`) {
@@ -335,14 +386,20 @@ export class FakeConvex {
           const secret = `${prefix.replace("beaming-okapi-932", deployment)}|${bearer}`;
           return json(200, { ...recorded("deployment_create_deploy_key.json"), deployKey: secret });
         }
+        const actions = body?.["allowedActions"];
         const key = {
           id: this.nextId++,
           name: String(body?.["name"]),
           // The recorded secret with this key's deployment in the prefix, as
           // Convex makes them: `dev:<deployment>|...`.
           secret: `${recordedSecret.replace("beaming-okapi-932", deployment)}-${this.nextId}`,
+          actions:
+            actions === undefined
+              ? undefined
+              : Schema.decodeUnknownSync(Schema.Array(Schema.String))(actions),
         };
         keys.push(key);
+        this.keysOf(this.createdSecrets, deployment).push(key.secret);
         return json(200, {
           ...recorded("deployment_create_deploy_key.json"),
           deployKey: key.secret,
@@ -362,6 +419,119 @@ export class FakeConvex {
       default:
         throw new Error(`FakeConvex has no route for ${method} ${url.pathname}`);
     }
+  }
+
+  /**
+   * POST /api/function as the store deployment answers it: a key of the
+   * deployment with the action of the function, else the recorded refusals;
+   * a function that the deployment does not have, else its value.
+   */
+  private functionApi(
+    deployment: string,
+    secret: string,
+    body: Record<string, unknown> | undefined,
+  ): Response {
+    const key = this.keysOf(this.keys, deployment).find((candidate) => candidate.secret === secret);
+    if (key === undefined) return json(403, stateFixture("function_no_key.json"));
+    const { path, args } = Schema.decodeUnknownSync(FunctionCall)(body);
+    const name = path.replace(/^state:/, "");
+    // A push of the fake CLI with a key of this deployment installs the store.
+    if (!this.stores.has(deployment) && this.pushedByCli(deployment)) {
+      this.addStore(deployment, STORE_VERSION);
+    }
+    const store = this.stores.get(deployment);
+    const reply = (value: unknown) =>
+      json(200, { ...stateFixture("function_version.json"), value });
+    const error = (message: string) =>
+      json(200, { ...stateFixture("function_version_missing.json"), errorMessage: message });
+    if (store === undefined || !(STORE_QUERIES.includes(name) || STORE_MUTATIONS.includes(name))) {
+      return error(
+        `[Request ID: fake] Server Error\nCould not find function for '${path}'. Did you forget to run \`npx convex dev\`?\n`,
+      );
+    }
+    const action = STORE_QUERIES.includes(name)
+      ? "deployment:functions:runInternalQueries"
+      : "deployment:functions:runInternalMutations";
+    if (key.actions !== undefined && !key.actions.includes(action)) {
+      return error(
+        `[Request ID: fake] Server Error\nYou do not have permission to perform this operation (${action}).\n`,
+      );
+    }
+    this.functionCalls.push(`${deployment} ${path}`);
+    const { stack, stage, fqn, value = "" } = args;
+    const inStage = (row: StoreRow) => row.stack === stack && row.stage === stage;
+    const index = store.rows.findIndex((row) => inStage(row) && row.fqn === fqn);
+    const output = `${stack}/${stage}`;
+    switch (name) {
+      case "version":
+        return reply(store.version);
+      case "stacks":
+        return reply([...new Set(store.rows.map((row) => row.stack))].sort());
+      case "stages":
+        return reply(
+          [
+            ...new Set(store.rows.filter((row) => row.stack === stack).map((row) => row.stage)),
+          ].sort(),
+        );
+      case "list":
+        return reply(
+          store.rows
+            .filter(inStage)
+            .map((row) => row.fqn)
+            .sort(),
+        );
+      case "get":
+        return reply(store.rows[index]?.value ?? null);
+      case "replaced":
+        return reply(
+          store.rows
+            .filter(inStage)
+            .map((row) => row.value)
+            .filter(
+              (text) => Schema.decodeUnknownSync(Fields)(JSON.parse(text))["status"] === "replaced",
+            ),
+        );
+      case "set": {
+        const row = store.rows[index];
+        if (row === undefined)
+          store.rows.push({ stack: stack ?? "", stage: stage ?? "", fqn: fqn ?? "", value });
+        else store.rows[index] = { ...row, value };
+        return reply(null);
+      }
+      case "remove":
+        if (index >= 0) store.rows.splice(index, 1);
+        return reply(null);
+      case "removeStack": {
+        const gone = (row: StoreRow) =>
+          row.stack === stack && (stage === undefined || row.stage === stage);
+        store.rows = store.rows.filter((row) => !gone(row));
+        for (const name of store.outputs.keys()) {
+          if (stage === undefined ? name.startsWith(`${stack}/`) : name === output)
+            store.outputs.delete(name);
+        }
+        return reply(null);
+      }
+      case "getOutput":
+        return reply(store.outputs.get(output) ?? null);
+      case "setOutput":
+        store.outputs.set(output, value);
+        return reply(null);
+      default:
+        throw new Error(`FakeConvex has no store function ${path}`);
+    }
+  }
+
+  /** True when the fake CLI log (fixtures/fake-convex-cli.ts) has a run with a key of `deployment`. */
+  private pushedByCli(deployment: string) {
+    const log = process.env["ALCHEMY_CONVEX_FAKE_CLI_LOG"];
+    if (log === undefined || !existsSync(log)) return false;
+    const hashes = new Set(this.keysOf(this.createdSecrets, deployment).map(sha256));
+    return readFileSync(log, "utf8")
+      .split("\n")
+      .filter((line) => line !== "")
+      .some((line) =>
+        hashes.has(Schema.decodeUnknownSync(Schema.fromJsonString(CliRun))(line).keySha256),
+      );
   }
 
   private deploymentApi(
@@ -468,7 +638,7 @@ export class FakeConvex {
     });
   }
 
-  private keysOf(store: Map<string, Key[]>, owner: string) {
+  private keysOf<T>(store: Map<string, T[]>, owner: string) {
     const keys = store.get(owner) ?? [];
     store.set(owner, keys);
     return keys;

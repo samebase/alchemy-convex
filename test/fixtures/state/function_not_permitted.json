@@ -1,4 +1,1 @@
-{
-  "status": "error",
-  "errorMessage": "[Request ID: 354a89eae0115bc9] Server Error\nYou do not have permission to perform this operation (deployment:data:write).\n"
-}
+{"status":"error","errorMessage":"[Request ID: 393d3c43fd14ff6f] Server Error\nYou do not have permission to perform this operation (deployment:functions:runInternalMutations).\n"}

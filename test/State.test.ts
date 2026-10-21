@@ -1,148 +1,111 @@
-// Convex.state against a fake deployment behind a stubbed `fetch`. The fake
-// keeps the alchemyState rows in memory. Every reply is a recorded payload
-// from fixtures/state with only the value changed.
-import { readFileSync } from "node:fs";
-import { type CreatedResourceState, type CreatingResourceState, State } from "alchemy/State";
+// Convex.state against the fake Convex control plane: the Management API,
+// the function API of the store deployment, and the fake Convex CLI for the
+// push of the store. Every reply is a recorded payload with only the value
+// changed.
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { type CreatedResourceState, State } from "alchemy/State";
 import * as Cause from "effect/Cause";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Layer from "effect/Layer";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { makeConvexState, makeFunctionApi, state } from "../src/State.ts";
+import * as Scope from "effect/Scope";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fromValues } from "../src/Credentials.ts";
+import { ManagementApi, ManagementApiLive } from "../src/ManagementApi.ts";
+import { makeConvexState, RUN_KEY_ACTIONS, state, STORE_PROJECT_NAME } from "../src/State.ts";
+import { STORE_VERSION } from "../src/store/convex/version.ts";
+import { FakeConvex, stateFixture } from "./fakeConvex.ts";
 
-const fixture = (file: string): unknown =>
-  JSON.parse(readFileSync(new URL(`./fixtures/state/${file}`, import.meta.url), "utf8"));
-const Fields = Schema.Record(Schema.String, Schema.Unknown);
-const recorded = (file: string) => Schema.decodeUnknownSync(Fields)(fixture(file));
+const TEAM = 38516;
+const TOKEN = "test-token";
+const API = "api.convex.dev/v1";
+const FAKE_CLI = fileURLToPath(new URL("./fixtures/fake-convex-cli.ts", import.meta.url));
 
-const URL_ = Schema.decodeUnknownSync(Schema.String)(fixture("url_for_key.json"));
-const KEY = "prod:fine-cow-747|test-secret";
-
-const Call = Schema.Struct({
-  componentPath: Schema.optionalKey(Schema.String),
-  path: Schema.String,
-  args: Schema.Record(Schema.String, Schema.String),
+const Run = Schema.Struct({
+  args: Schema.Array(Schema.String),
+  home: Schema.String,
+  cwd: Schema.String,
 });
+const KeyBody = Schema.Struct({ name: Schema.String, allowedActions: Schema.Array(Schema.String) });
 
-const json = (status: number, body: unknown) =>
-  new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+let dir = "";
+/** The functions directory of a store app whose `convex` package is the fake CLI. */
+let store = "";
+let log = "";
 
-interface Row {
-  readonly stack: string;
-  readonly stage: string;
-  readonly fqn: string;
-  readonly value: string;
-}
-
-class FakeDeployment {
-  /** The mount of alchemyState in the component list: undefined until a push. */
-  mount: "active" | "unmounted" | undefined = "active";
-  /** A recorded error reply for every component call, such as a missing key action. */
-  error: unknown;
-  rows: Row[] = [];
-  readonly outputs = new Map<string, string>();
-  /** The component functions that ran, in order. */
-  readonly calls: string[] = [];
-  readonly authorizations = new Set<string>();
-
-  install() {
-    vi.stubGlobal("fetch", (input: string, init: RequestInit) => this.fetch(input, init));
-    return this;
-  }
-
-  private fetch(input: string, init: RequestInit) {
-    const body: unknown = JSON.parse(typeof init.body === "string" ? init.body : "null");
-    if (input === "https://api.convex.dev/api/deployment/url_for_key") {
-      return Promise.resolve(json(200, fixture("url_for_key.json")));
-    }
-    this.authorizations.add(new Headers(init.headers).get("Authorization") ?? "");
-    const call = Schema.decodeUnknownSync(Call)(body);
-    if (input === `${URL_}/api/query` && call.path === "_system/frontend/components:list") {
-      return Promise.resolve(json(200, this.components()));
-    }
-    if (input === `${URL_}/api/function` && call.componentPath === "alchemyState") {
-      if (this.mount !== "active")
-        return Promise.resolve(json(500, fixture("function_component_missing.json")));
-      if (this.error !== undefined) return Promise.resolve(json(200, this.error));
-      this.calls.push(call.path);
-      return Promise.resolve(
-        json(200, { ...recorded("function_list.json"), value: this.run(call.path, call.args) }),
-      );
-    }
-    return Promise.resolve(json(404, { code: "NotFound", message: `fake: ${input}` }));
-  }
-
-  private components() {
-    const reply = recorded("components_list_unmounted.json");
-    const rows = Schema.decodeUnknownSync(Schema.Array(Fields))(reply["value"]);
-    const [root, component] = rows;
-    if (this.mount === undefined) return recorded("components_list_empty.json");
-    return { ...reply, value: [root, { ...component, state: this.mount }] };
-  }
-
-  private run(path: string, args: Record<string, string>) {
-    const { stack, stage, fqn, value = "" } = args;
-    const inStage = (row: Row) => row.stack === stack && row.stage === stage;
-    const index = this.rows.findIndex((row) => inStage(row) && row.fqn === fqn);
-    const output = `${stack}/${stage}`;
-    switch (path) {
-      case "state:stacks":
-        return [...new Set(this.rows.map((row) => row.stack))];
-      case "state:stages":
-        return [...new Set(this.rows.filter((row) => row.stack === stack).map((row) => row.stage))];
-      case "state:list":
-        return this.rows.filter(inStage).map((row) => row.fqn);
-      case "state:get":
-        return this.rows[index]?.value ?? null;
-      case "state:set": {
-        const row = this.rows[index];
-        if (row === undefined)
-          this.rows.push({ stack: stack ?? "", stage: stage ?? "", fqn: fqn ?? "", value });
-        else this.rows[index] = { ...row, value };
-        return null;
-      }
-      case "state:remove":
-        if (index >= 0) this.rows.splice(index, 1);
-        return null;
-      case "state:removeStack":
-        this.rows = this.rows.filter((row) => !inStage(row));
-        this.outputs.delete(output);
-        return null;
-      case "state:getOutput":
-        return this.outputs.get(output) ?? null;
-      case "state:setOutput":
-        this.outputs.set(output, value);
-        return null;
-      default:
-        throw new Error(`fake: ${path}`);
-    }
-  }
-}
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), "alchemy-convex-state-test-"));
+  const app = join(dir, "store");
+  store = join(app, "convex");
+  mkdirSync(store, { recursive: true });
+  mkdirSync(join(app, "node_modules", "convex"), { recursive: true });
+  writeFileSync(
+    join(app, "package.json"),
+    JSON.stringify({ name: "alchemy-state", private: true }),
+  );
+  writeFileSync(
+    join(app, "node_modules", "convex", "package.json"),
+    JSON.stringify({ name: "convex", bin: { convex: FAKE_CLI } }),
+  );
+  log = join(dir, "runs.jsonl");
+  vi.stubEnv("ALCHEMY_CONVEX_FAKE_CLI_LOG", log);
+  vi.stubEnv("ALCHEMY_CONVEX_FAKE_CLI_MODE", "ok");
+});
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+  rmSync(dir, { recursive: true, force: true });
 });
 
-const where = { stack: "App", stage: "main" };
-/** The row of fixtures/state/function_get.json, which the live run wrote. */
-const created = (props: Record<string, unknown> = {}): CreatedResourceState => ({
+const runs = () =>
+  Effect.promise(async () => {
+    const { readFile } = await import("node:fs/promises");
+    const text = await readFile(log, "utf8").catch(() => "");
+    return text
+      .trim()
+      .split("\n")
+      .filter((line) => line !== "")
+      .map((line) => Schema.decodeUnknownSync(Schema.fromJsonString(Run))(line));
+  });
+
+const created = (fqn: string): CreatedResourceState => ({
   status: "created",
-  fqn: "Deployment",
-  logicalId: "Deployment",
+  fqn,
+  logicalId: fqn,
   instanceId: "9058feab6047cbbe014a3530ca68230f",
-  resourceType: "Convex.Deployment",
+  resourceType: "Convex.Project",
   namespace: undefined,
   providerVersion: 0,
   downstream: [],
   bindings: [],
-  props: { project: { projectId: 3246004 }, type: "prod", source: "./convex", ...props },
-  attr: { name: "fine-cow-747", url: "https://fine-cow-747.convex.cloud" },
+  props: { team: "nicu", name: "app" },
+  attr: { projectId: 1 },
 });
-const creating = (): CreatingResourceState => ({ ...created(), status: "creating" });
 
-const open = makeConvexState(makeFunctionApi(URL_, Redacted.make(KEY)));
+/** The store service over the fake, with its own scope, which `close` ends. */
+const open = (team: string | number = TEAM) =>
+  Effect.gen(function* () {
+    const api = yield* ManagementApi;
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const scope = yield* Scope.make();
+    const service = yield* makeConvexState({ team, api, spawner, scope, store });
+    return { service, close: Scope.close(scope, Exit.void) };
+  }).pipe(
+    Effect.provide(
+      ManagementApiLive().pipe(Layer.provide(fromValues({ accessToken: Redacted.make(TOKEN) }))),
+    ),
+    Effect.provide(NodeServices.layer),
+  );
+
 const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect);
 /** The rendered failure of `effect`, or "" when it succeeds. */
 const failureOf = async <A, E>(effect: Effect.Effect<A, E>) => {
@@ -150,105 +113,157 @@ const failureOf = async <A, E>(effect: Effect.Effect<A, E>) => {
   return Exit.isFailure(exit) ? Cause.pretty(exit.cause) : "";
 };
 
+const stack = { stack: "samebase/app", stage: "main" };
+const keyCalls = (fake: FakeConvex) =>
+  fake.sent.filter((request) => request.path.endsWith("_deploy_key"));
+
 describe("Convex.state", () => {
-  it("reads and writes rows of the component with the deploy key", async () => {
-    const fake = new FakeDeployment().install();
-    const secret = Redacted.make("an env value");
-    const store = await run(open);
-    await run(store.set({ ...where, fqn: "Deployment", value: created({ env: { A: secret } }) }));
-    await run(store.setOutput({ ...where, value: { url: "https://fine-cow-747.convex.cloud" } }));
+  it("creates the state project of the team, pushes the store, and serves the rows", async () => {
+    const fake = new FakeConvex().install();
+    // The project is new, so its deployment has no functions until the push.
+    fake.addProject({ name: "other-app", teamId: TEAM });
+    const { service, close } = await run(open());
+    const project = fake.projects.find((row) => row["name"] === STORE_PROJECT_NAME);
+    const deployment = String(project?.["prodDeploymentName"]);
+    expect(fake.lines()).toContain(`POST ${API}/teams/${TEAM}/create_project`);
+    expect(fake.stores.get(deployment)?.version).toBe(STORE_VERSION);
 
-    // A Redacted value comes back as a Redacted value, like Alchemy's other stores.
-    const read = Schema.decodeUnknownSync(
-      Schema.Struct({
-        status: Schema.String,
-        props: Schema.Struct({ env: Schema.Struct({ A: Schema.Unknown }) }),
-      }),
-    )(await run(store.get({ ...where, fqn: "Deployment" })));
-    expect(read.status).toBe("created");
-    const value = read.props.env.A;
-    expect(Redacted.isRedacted(value) && Redacted.value(value)).toBe("an env value");
-    expect(await run(store.list(where))).toEqual(["Deployment"]);
-    expect(await run(store.listStacks())).toEqual(["App"]);
-    expect(await run(store.listStages("App"))).toEqual(["main"]);
-    expect(await run(store.getOutput(where))).toEqual({ url: "https://fine-cow-747.convex.cloud" });
-    expect([...fake.authorizations]).toEqual([`Convex ${KEY}`]);
-
-    await run(store.deleteStack(where));
-    expect(await run(store.list(where))).toEqual([]);
-    expect(await run(store.getOutput(where))).toBeUndefined();
-  });
-
-  it("keeps the first run in memory and writes it after the push mounts the component", async () => {
-    const fake = new FakeDeployment().install();
-    fake.mount = undefined;
-    const store = await run(open);
-    expect(await run(store.list(where))).toEqual([]);
-    await run(store.set({ ...where, fqn: "Deployment", value: creating() }));
-    expect(fake.calls).toEqual([]);
-    expect(await run(store.get({ ...where, fqn: "Deployment" }))).toMatchObject({
-      status: "creating",
+    const [runKey, pushKey, pushKeyDelete] = keyCalls(fake);
+    expect(Schema.decodeUnknownSync(KeyBody)(runKey?.body)).toEqual({
+      name: "alchemy-state",
+      allowedActions: [...RUN_KEY_ACTIONS],
     });
+    expect(Schema.decodeUnknownSync(KeyBody)(pushKey?.body).allowedActions).toEqual([
+      "deployment:deploy",
+      "deployment:env:view",
+      "deployment:env:write",
+    ]);
+    expect(pushKeyDelete?.path).toBe(`${API}/deployments/${deployment}/delete_deploy_key`);
+    const [pushed] = await run(runs());
+    expect(pushed?.args).toEqual(["deploy", "--typecheck", "disable", "--codegen", "disable"]);
+    expect(pushed?.cwd).toBe(realpathSync(join(dir, "store")));
+    expect(pushed?.home).not.toBe(homedir());
 
-    fake.mount = "active"; // the Deployment push installed alchemyState
-    await run(store.set({ ...where, fqn: "Deployment", value: created() }));
-    await run(store.setOutput({ ...where, value: { url: "u" } }));
-    expect(fake.calls).toEqual(["state:list", "state:set", "state:setOutput"]);
-    expect(await run(store.get({ ...where, fqn: "Deployment" }))).toMatchObject({
+    await run(service.set({ ...stack, fqn: "Project", value: created("Project") }));
+    await run(service.setOutput({ ...stack, value: { url: "https://app.convex.site" } }));
+    expect(await run(service.list(stack))).toEqual(["Project"]);
+    expect(await run(service.get({ ...stack, fqn: "Project" }))).toMatchObject({
       status: "created",
     });
-    expect(fake.outputs.size).toBe(1);
+    expect(await run(service.listStacks())).toEqual(["samebase/app"]);
+    expect(await run(service.listStages("samebase/app"))).toEqual(["main"]);
+    expect(await run(service.getOutput(stack))).toEqual({ url: "https://app.convex.site" });
+    expect(fake.functionCalls.filter((line) => !line.endsWith("state:version"))).toEqual([
+      `${deployment} state:set`,
+      `${deployment} state:setOutput`,
+      `${deployment} state:list`,
+      `${deployment} state:get`,
+      `${deployment} state:stacks`,
+      `${deployment} state:stages`,
+      `${deployment} state:getOutput`,
+    ]);
+
+    // The key of the run goes with its scope.
+    expect(fake.keys.get(deployment)).toHaveLength(1);
+    await run(close);
+    expect(fake.keys.get(deployment)).toEqual([]);
   });
 
-  it("fails at the stack output when the run never mounted the component", async () => {
-    new FakeDeployment().install().mount = undefined;
-    const store = await run(open);
-    await run(store.set({ ...where, fqn: "Deployment", value: created() }));
-    expect(await failureOf(store.setOutput({ ...where, value: {} }))).toContain(
-      "this run saved no state",
+  it("finds the project with the current store and pushes nothing", async () => {
+    const fake = new FakeConvex().install();
+    const projectId = fake.addProject({ name: STORE_PROJECT_NAME, teamId: TEAM });
+    const deployment = fake.project(projectId)?.prodDeploymentName ?? "";
+    fake.addStore(deployment, STORE_VERSION);
+    const { service } = await run(open());
+    expect(fake.lines().filter((line) => line.endsWith("/create_project"))).toEqual([]);
+    expect(keyCalls(fake)).toHaveLength(1);
+    expect(await run(runs())).toEqual([]);
+    expect(await run(service.listStacks())).toEqual([]);
+  });
+
+  it("keeps the stacks of two repositories apart in one store", async () => {
+    const fake = new FakeConvex().install();
+    const deployment =
+      fake.project(fake.addProject({ name: STORE_PROJECT_NAME, teamId: TEAM }))
+        ?.prodDeploymentName ?? "";
+    fake.addStore(deployment, STORE_VERSION);
+    const { service } = await run(open());
+    const other = { stack: "samebase/other", stage: "main" };
+    await run(service.set({ ...stack, fqn: "Project", value: created("Project") }));
+    await run(service.set({ ...stack, stage: "pr-1", fqn: "Project", value: created("Project") }));
+    await run(service.set({ ...other, fqn: "Project", value: created("Project") }));
+    expect(await run(service.listStacks())).toEqual(["samebase/app", "samebase/other"]);
+    expect(await run(service.listStages("samebase/app"))).toEqual(["main", "pr-1"]);
+
+    await run(service.deleteStack({ stack: "samebase/app", stage: "pr-1" }));
+    expect(await run(service.listStages("samebase/app"))).toEqual(["main"]);
+    await run(service.deleteStack({ stack: "samebase/app" }));
+    expect(await run(service.listStacks())).toEqual(["samebase/other"]);
+    expect(await run(service.list(other))).toEqual(["Project"]);
+  });
+
+  it("upgrades an older store and refuses a newer one", async () => {
+    const fake = new FakeConvex().install();
+    const deployment =
+      fake.project(fake.addProject({ name: STORE_PROJECT_NAME, teamId: TEAM }))
+        ?.prodDeploymentName ?? "";
+    // The deployment answers version 0 until the fake CLI "pushed", then the current version.
+    const store = fake.addStore(deployment, STORE_VERSION);
+    fake.scripted.set(`POST ${deployment}.convex.cloud/api/function`, [
+      { status: 200, body: { ...stateFixture("function_version.json"), value: 0 } },
+    ]);
+    await run(open());
+    expect(await run(runs())).toHaveLength(1);
+
+    store.version = STORE_VERSION + 1;
+    expect(await failureOf(open())).toContain("Upgrade @samebase/alchemy-convex");
+    expect(await run(runs())).toHaveLength(1);
+  });
+
+  it("does not push over a project with code that is not the store", async () => {
+    const fake = new FakeConvex().install();
+    const deployment =
+      fake.project(fake.addProject({ name: STORE_PROJECT_NAME, teamId: TEAM }))
+        ?.prodDeploymentName ?? "";
+    fake.markDeployed(deployment);
+    expect(await failureOf(open())).toContain("has code that is not the state store");
+    expect(await run(runs())).toEqual([]);
+  });
+
+  it("passes on the Convex message of a key without the mutation action", async () => {
+    const fake = new FakeConvex().install();
+    const deployment =
+      fake.project(fake.addProject({ name: STORE_PROJECT_NAME, teamId: TEAM }))
+        ?.prodDeploymentName ?? "";
+    fake.addStore(deployment, STORE_VERSION);
+    const { service } = await run(open());
+    fake.scripted.set(`POST ${deployment}.convex.cloud/api/function`, [
+      { status: 200, body: stateFixture("function_not_permitted.json") },
+    ]);
+    expect(await failureOf(service.delete({ ...stack, fqn: "Absent" }))).toContain(
+      "(deployment:functions:runInternalMutations)",
     );
   });
 
-  it("writes nothing when the component appears with rows that the run did not read", async () => {
-    const fake = new FakeDeployment().install();
-    fake.mount = undefined;
-    const store = await run(open);
-    fake.mount = "active";
-    fake.rows.push({ ...where, fqn: "Other", value: "{}" });
-    expect(
-      await failureOf(store.set({ ...where, fqn: "Deployment", value: creating() })),
-    ).toContain("did not read");
-    expect(fake.calls).toEqual(["state:list"]);
-  });
-
-  it("refuses an unmounted component, which keeps its rows", async () => {
-    new FakeDeployment().install().mount = "unmounted";
-    expect(await failureOf(open)).toContain("unmounted");
-  });
-
-  it("passes on the Convex message of a key without deployment:data:write", async () => {
-    const fake = new FakeDeployment().install();
-    const store = await run(open);
-    fake.error = fixture("function_not_permitted.json");
-    expect(await failureOf(store.delete({ ...where, fqn: "Absent" }))).toContain(
-      "(deployment:data:write)",
-    );
-  });
-
-  it("reads CONVEX_STATE_DEPLOY_KEY and refuses a preview deploy key", async () => {
-    new FakeDeployment().install();
-    const service = (key: string) =>
+  it("reads CONVEX_ACCESS_TOKEN through the stack's ConfigProvider", async () => {
+    const fake = new FakeConvex().install();
+    const deployment =
+      fake.project(fake.addProject({ name: STORE_PROJECT_NAME, teamId: TEAM }))
+        ?.prodDeploymentName ?? "";
+    fake.addStore(deployment, STORE_VERSION);
+    const service = await run(
       Effect.gen(function* () {
         return yield* yield* State;
       }).pipe(
-        Effect.provide(state()),
+        Effect.provide(state({ team: TEAM })),
+        Effect.provide(NodeServices.layer),
         Effect.provide(
-          ConfigProvider.layer(ConfigProvider.fromEnvRecord({ CONVEX_STATE_DEPLOY_KEY: key })),
+          ConfigProvider.layer(ConfigProvider.fromEnvRecord({ CONVEX_ACCESS_TOKEN: TOKEN })),
         ),
-      );
-    expect((await run(service(KEY))).id).toBe("convex");
-    expect(await failureOf(service("preview:nicu:app|test-secret"))).toContain(
-      "not a preview deploy key",
+        Effect.scoped,
+      ),
     );
+    expect(service.id).toBe("convex");
+    expect(fake.sent[0]?.authorization).toBe(`Bearer ${TOKEN}`);
   });
 });

@@ -1,13 +1,25 @@
-// The state functions. A component function is not part of the public API of
-// the app: only POST /api/function with a deploy key reaches it, and that key
-// needs `deployment:data:view` for a query and `deployment:data:write` for a
-// mutation (measured).
+// The state functions of the alchemy-state project: one project for each
+// Convex team, pushed by Convex.state() from this directory. Every function
+// is internal: a public function of a root app answers anyone who knows the
+// deployment URL, with no key (measured). An internal function answers only
+// POST /api/function with a deploy key of the production deployment, the
+// call that `convex run` makes.
 //
 // A stage holds one row for each resource of its stack, so the reads of one
-// stage collect all rows.
+// stage collect all rows. The function names are a wire contract: Samebase
+// reads `stacks` and `getOutput` by name, and an older client calls an older
+// set of names. Add functions; never rename or remove one.
 import { v } from "convex/values";
 import type { QueryCtx } from "./_generated/server.js";
-import { mutation, query } from "./_generated/server.js";
+import { internalMutation, internalQuery } from "./_generated/server.js";
+import { STORE_VERSION } from "./version.ts";
+
+/** The wire version of this store, compared with the client's STORE_VERSION. */
+export const version = internalQuery({
+  args: {},
+  returns: v.number(),
+  handler: async () => STORE_VERSION,
+});
 
 const stage = { stack: v.string(), stage: v.string() };
 const resource = { ...stage, fqn: v.string() };
@@ -32,60 +44,98 @@ const outputOf = (ctx: QueryCtx, args: { stack: string; stage: string }) =>
     .withIndex("by_stage", (q) => q.eq("stack", args.stack).eq("stage", args.stage))
     .unique();
 
-/** Stacks with at least one resource, in index order: one index read for each stack. */
-export const stacks = query({
+/** The sorted union of two lists of names. */
+const union = (a: readonly string[], b: readonly string[]) => [...new Set([...a, ...b])].sort();
+
+/**
+ * The distinct names of one table in index order, with one index read for
+ * each name: `first(after)` is the first row whose name is above `after`.
+ */
+const distinct = async (first: (after: string | undefined) => Promise<string | null>) => {
+  const names: string[] = [];
+  for (;;) {
+    const next = await first(names.at(-1));
+    if (next === null) return names;
+    names.push(next);
+  }
+};
+
+/** Stacks with at least one resource or one output, sorted. */
+export const stacks = internalQuery({
   args: {},
   returns: v.array(v.string()),
-  handler: async (ctx) => {
-    const names: string[] = [];
-    for (;;) {
-      const last = names.at(-1);
-      const next = await ctx.db
-        .query("resources")
-        .withIndex("by_fqn", (q) => (last === undefined ? q : q.gt("stack", last)))
-        .first();
-      if (next === null) return names;
-      names.push(next.stack);
-    }
-  },
+  handler: async (ctx) =>
+    union(
+      await distinct(
+        async (after) =>
+          (
+            await ctx.db
+              .query("resources")
+              .withIndex("by_fqn", (q) => (after === undefined ? q : q.gt("stack", after)))
+              .first()
+          )?.stack ?? null,
+      ),
+      await distinct(
+        async (after) =>
+          (
+            await ctx.db
+              .query("outputs")
+              .withIndex("by_stage", (q) => (after === undefined ? q : q.gt("stack", after)))
+              .first()
+          )?.stack ?? null,
+      ),
+    ),
 });
 
-/** Stages of a stack with at least one resource, in index order. */
-export const stages = query({
+/** Stages of a stack with at least one resource or one output, sorted. */
+export const stages = internalQuery({
   args: { stack: v.string() },
   returns: v.array(v.string()),
-  handler: async (ctx, args) => {
-    const names: string[] = [];
-    for (;;) {
-      const last = names.at(-1);
-      const next = await ctx.db
-        .query("resources")
-        .withIndex("by_fqn", (q) =>
-          last === undefined
-            ? q.eq("stack", args.stack)
-            : q.eq("stack", args.stack).gt("stage", last),
-        )
-        .first();
-      if (next === null) return names;
-      names.push(next.stage);
-    }
-  },
+  handler: async (ctx, args) =>
+    union(
+      await distinct(
+        async (after) =>
+          (
+            await ctx.db
+              .query("resources")
+              .withIndex("by_fqn", (q) =>
+                after === undefined
+                  ? q.eq("stack", args.stack)
+                  : q.eq("stack", args.stack).gt("stage", after),
+              )
+              .first()
+          )?.stage ?? null,
+      ),
+      await distinct(
+        async (after) =>
+          (
+            await ctx.db
+              .query("outputs")
+              .withIndex("by_stage", (q) =>
+                after === undefined
+                  ? q.eq("stack", args.stack)
+                  : q.eq("stack", args.stack).gt("stage", after),
+              )
+              .first()
+          )?.stage ?? null,
+      ),
+    ),
 });
 
-export const list = query({
+export const list = internalQuery({
   args: stage,
   returns: v.array(v.string()),
   handler: async (ctx, args) => (await rowsOf(ctx, args)).map((row) => row.fqn),
 });
 
-export const get = query({
+export const get = internalQuery({
   args: resource,
   returns: v.union(v.string(), v.null()),
   handler: async (ctx, args) => (await rowOf(ctx, args))?.value ?? null,
 });
 
 /** Resources whose state has `status: "replaced"`. */
-export const replaced = query({
+export const replaced = internalQuery({
   args: stage,
   returns: v.array(v.string()),
   handler: async (ctx, args) =>
@@ -102,7 +152,7 @@ export const replaced = query({
       }),
 });
 
-export const set = mutation({
+export const set = internalMutation({
   args: { ...resource, value: v.string() },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -113,7 +163,7 @@ export const set = mutation({
   },
 });
 
-export const remove = mutation({
+export const remove = internalMutation({
   args: resource,
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -124,7 +174,7 @@ export const remove = mutation({
 });
 
 /** Deletes the resources and outputs of one stage, or of every stage of the stack. */
-export const removeStack = mutation({
+export const removeStack = internalMutation({
   args: { stack: v.string(), stage: v.optional(v.string()) },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -151,13 +201,13 @@ export const removeStack = mutation({
   },
 });
 
-export const getOutput = query({
+export const getOutput = internalQuery({
   args: stage,
   returns: v.union(v.string(), v.null()),
   handler: async (ctx, args) => (await outputOf(ctx, args))?.value ?? null,
 });
 
-export const setOutput = mutation({
+export const setOutput = internalMutation({
   args: { ...stage, value: v.string() },
   returns: v.null(),
   handler: async (ctx, args) => {

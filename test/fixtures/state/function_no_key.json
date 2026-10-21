@@ -1,4 +1,1 @@
-{
-  "code": "BadDeployKey",
-  "message": "The provided deploy key was invalid for this deployment. Double check that the environment this key was generated for matches the desired deployment."
-}
+{"code":"BadDeployKey","message":"The provided deploy key was invalid for this deployment. Double check that the environment this key was generated for matches the desired deployment."}

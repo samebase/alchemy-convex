@@ -1,33 +1,39 @@
-// Alchemy state in Convex: `state: Convex.state()` in `Alchemy.Stack`.
+// Alchemy state in Convex: `state: Convex.state({ team })` in `Alchemy.Stack`.
 //
-// The state of every stage lives in the alchemyState component
-// (`@samebase/alchemy-convex/convex.config`), which the app mounts and pushes
-// to the production deployment of its project. The store calls the component
-// functions through POST <deployment>/api/function with a component path, the
-// call that `convex run --component` makes, with the deploy key in
-// CONVEX_STATE_DEPLOY_KEY. Measured: a component query needs the key action
-// `deployment:data:view`, a component mutation `deployment:data:write`, and a
-// call without a key gets HTTP 403. See docs/design/convex-state.md.
+// One project for each Convex team, `alchemy-state`, holds the state of
+// every stack and stage of the team in its production deployment: the
+// tables `resources (stack, stage, fqn, value)` and `outputs (stack, stage,
+// value)`, served by the functions of src/store/convex. The store lives
+// outside every resource that a stack manages, so a stack can create and
+// destroy its own project. See docs/design/convex-state.md.
 //
-// Bootstrap: Alchemy reads state before the first push, when the deployment
-// has no alchemyState component yet. The store asks the component list of the
-// deployment, and only a deployment without the component means empty state.
-// The store then keeps the state of the run in memory and moves it to the
-// component on the first write after the component is active: the first
-// write after the push. A run that ends with its state still in memory fails
-// at the stack output. An unmounted component keeps its rows, so it fails.
+// Bootstrap, on the first call of the run: the team token (CONVEX_ACCESS_TOKEN,
+// or the Convex CLI login) finds the project by name, or creates it; a deploy
+// key of its production deployment that can run internal queries and
+// mutations, and nothing else, is created for the run and deleted at its
+// end; the `state:version` query says whether the deployment has the store
+// of this version. Without one, or with an older one, the installed Convex
+// CLI pushes src/store/convex to it, with a push key that is deleted after
+// the push. The functions are internal, so only POST /api/function with such
+// a key reaches them: a public function of a root app answers anyone who
+// knows the deployment URL (measured).
 //
-// The function names of the component are a wire contract. An older
-// component must answer a newer store, so a name is never renamed or removed.
-import * as Config from "effect/Config";
+// The function names are a wire contract: Samebase reads `stacks` and
+// `getOutput` by name, and an older client calls an older set of names. A
+// name is never renamed or removed. STORE_VERSION rises when a function
+// changes in a way that an older client cannot use, and a client never
+// pushes an older store over a newer one.
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as Redacted from "effect/Redacted";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import {
   encodeState,
-  InMemoryService,
   type PersistedState,
   type ReplacedResourceState,
   reviveState,
@@ -36,22 +42,42 @@ import {
   STATE_STORE_VERSION,
   StateStoreError,
 } from "alchemy/State";
-import { keyTargetOf } from "./Push.ts";
+import { fromConfig } from "./Credentials.ts";
+import { ProductionDeploymentNotFound } from "./Deployment.ts";
+import { ManagementApi, ManagementApiLive, type ManagementApiService } from "./ManagementApi.ts";
+import { createProject, findProjectByName, prodDeploymentOf } from "./Project.ts";
+import {
+  createDeployKey,
+  deleteDeployKey,
+  installedCli,
+  push,
+  PUSH_KEY_ACTIONS,
+  withPushKey,
+} from "./Push.ts";
+import { STORE_VERSION } from "./store/convex/version.ts";
 
-/** Environment variable with the deploy key of the deployment that holds the state. */
-export const STATE_DEPLOY_KEY_ENV = "CONVEX_STATE_DEPLOY_KEY";
+/** The name of the state project in each team. */
+export const STORE_PROJECT_NAME = "alchemy-state";
 
-/** The component path of alchemyState in the app: its default name. */
-const COMPONENT_PATH = "alchemyState";
+/**
+ * The actions of the key of one run: the internal queries and mutations of
+ * the store, nothing else. Measured: `deployment:data:view` and
+ * `deployment:data:write` do not run an internal function.
+ */
+export const RUN_KEY_ACTIONS = [
+  "deployment:functions:runInternalQueries",
+  "deployment:functions:runInternalMutations",
+] as const;
 
-/** The body of POST /api/function and /api/query, with HTTP 200 or 560 for a function error. */
+/** The body of POST /api/function, with HTTP 200 for a function error too. */
 const Reply = Schema.Union([
   Schema.Struct({ status: Schema.Literal("success"), value: Schema.Unknown }),
   Schema.Struct({ status: Schema.Literal("error"), errorMessage: Schema.String }),
 ]);
+type Reply = typeof Reply.Type;
 
-/** The value of `_system/frontend/components:list`: the root has path "", a removed mount is "unmounted". */
-const Components = Schema.Array(Schema.Struct({ path: Schema.String, state: Schema.String }));
+/** The error reply of /api/function for a function that the deployment does not have (recorded). */
+const MISSING_FUNCTION = /Could not find function for '/;
 
 const failure = (message: string) => new StateStoreError({ message: `Convex state: ${message}` });
 
@@ -99,58 +125,34 @@ const decode =
   (value: unknown) =>
     Schema.decodeUnknownEffect(schema)(value).pipe(Effect.mapError(() => failure(`bad ${what}`)));
 
-/**
- * The deployment URL of a deploy key. The Convex CLI makes the same unofficial
- * call for every deploy key (convex 1.46 `cli/lib/deploymentSelection.js`).
- */
-const urlForKey = (key: Redacted.Redacted<string>) =>
-  post(
-    "https://api.convex.dev/api/deployment/url_for_key",
-    {},
-    { deployKey: Redacted.value(key) },
-  ).pipe(Effect.flatMap(decode(Schema.String, "deployment URL")));
-
-/** The Convex function API of one deployment, with an admin key. */
+/** The function API of the store deployment, with a deploy key. */
 export interface FunctionApi {
-  /** Runs a function of the component, or a system function of the root with `componentPath` undefined. */
+  /** POST /api/function, the call that `convex run` makes: the reply, which can be a function error. */
   readonly call: (
     path: string,
     args: Record<string, string | undefined>,
-    componentPath?: string,
-  ) => Effect.Effect<unknown, StateStoreError>;
+  ) => Effect.Effect<Reply, StateStoreError>;
 }
 
 export const makeFunctionApi = (url: string, key: Redacted.Redacted<string>): FunctionApi => ({
-  call: (path, args, componentPath) =>
+  call: (path, args) =>
     post(
-      // A component function answers only through /api/function. A system query
-      // of the root answers only through /api/query (measured).
-      `${url}/api/${componentPath === undefined ? "query" : "function"}`,
+      `${url}/api/function`,
       { Authorization: `Convex ${Redacted.value(key)}` },
-      { ...(componentPath === undefined ? {} : { componentPath }), path, args, format: "json" },
-    ).pipe(
-      Effect.flatMap(decode(Reply, `reply of ${path}`)),
-      Effect.flatMap((reply) =>
-        reply.status === "success"
-          ? Effect.succeed(reply.value)
-          : // The message names the function and the cause, such as a missing key
-            // action. The key is a header, and Convex does not echo arguments.
-            Effect.fail(failure(reply.errorMessage.trim())),
-      ),
-    ),
+      { path, args, format: "json" },
+    ).pipe(Effect.flatMap(decode(Reply, `reply of ${path}`))),
 });
 
-/** The state of the alchemyState mount: "active", "unmounted" (its rows are kept), or undefined. */
-const mountOf = (api: FunctionApi) =>
-  api.call("_system/frontend/components:list", {}).pipe(
-    Effect.flatMap(decode(Components, "component list")),
-    Effect.map((components) => components.find((c) => c.path === COMPONENT_PATH)?.state),
-  );
+/** The value of a reply, or the Convex message, which names the function and the cause, such as a missing key action. */
+const valueOf = (reply: Reply) =>
+  reply.status === "success"
+    ? Effect.succeed(reply.value)
+    : Effect.fail(failure(reply.errorMessage.trim()));
 
-/** The component functions with Alchemy's encoding: the JSON text of encodeState. */
+/** The functions of the store with Alchemy's encoding: the JSON text of encodeState. */
 const remoteOf = (api: FunctionApi) => {
   const run = (name: string, args: Record<string, string | undefined>) =>
-    api.call(`state:${name}`, args, COMPONENT_PATH);
+    api.call(`state:${name}`, args).pipe(Effect.flatMap(valueOf));
   const strings = (name: string, args: Record<string, string>) =>
     run(name, args).pipe(Effect.flatMap(decode(Schema.Array(Schema.String), name)));
   const optional = (name: string, args: Record<string, string>) =>
@@ -189,127 +191,167 @@ const remoteOf = (api: FunctionApi) => {
   };
 };
 
-const unmounted = failure(
-  `the ${COMPONENT_PATH} component of the deployment is unmounted. Its rows are kept: mount @samebase/alchemy-convex/convex.config in convex/convex.config.ts again.`,
-);
-
-/**
- * The StateService over `api`. Without an alchemyState component at
- * the start, the state of the run stays in memory until a write finds the
- * component active.
- */
-export const makeConvexState = (api: FunctionApi) =>
-  Effect.gen(function* () {
-    const remote = remoteOf(api);
-    const mount = yield* mountOf(api);
-    if (mount === "unmounted") return yield* unmounted;
-    let pending = mount === undefined;
-
-    // The records that InMemoryService writes to, read again by the flush.
-    const rows: Record<string, Record<string, Record<string, PersistedState>>> = {};
-    const outputs: Record<string, Record<string, unknown>> = {};
-    const memory = yield* InMemoryService(
-      // @ts-expect-error InMemoryService types the records as ResourceState, and its set stores every PersistedState.
-      rows,
-      outputs,
+/** The version that the store answers, or undefined when the deployment has no `state:version`. */
+const storeVersion = (api: FunctionApi) =>
+  api
+    .call("state:version", {})
+    .pipe(
+      Effect.flatMap((reply) =>
+        reply.status === "error" && MISSING_FUNCTION.test(reply.errorMessage)
+          ? Effect.succeed(undefined)
+          : valueOf(reply).pipe(Effect.flatMap(decode(Schema.Number, "store version"))),
+      ),
     );
 
-    /** Moves the memory to the component once it is active. Rows that the run did not read stop it. */
-    const flush = Effect.gen(function* () {
-      const now = yield* mountOf(api);
-      if (now === undefined) return;
-      if (now !== "active") return yield* unmounted;
-      const stages = [...new Set([...Object.keys(rows), ...Object.keys(outputs)])].flatMap(
-        (stack) =>
-          [
-            ...new Set([...Object.keys(rows[stack] ?? {}), ...Object.keys(outputs[stack] ?? {})]),
-          ].map((stage) => ({ stack, stage })),
-      );
-      for (const { stack, stage } of stages) {
-        const found = yield* remote.list({ stack, stage });
-        if (found.length > 0) {
-          return yield* failure(
-            `${stack}/${stage} has ${found.length} rows in the deployment that this run did not read, so the run wrote none. Run it again.`,
-          );
-        }
-      }
-      for (const { stack, stage } of stages) {
-        for (const [fqn, value] of Object.entries(rows[stack]?.[stage] ?? {})) {
-          yield* remote.set({ stack, stage, fqn, value });
-        }
-        const byStage = outputs[stack];
-        if (byStage !== undefined && stage in byStage) {
-          yield* remote.setOutput({ stack, stage, value: byStage[stage] });
-        }
-      }
-      pending = false;
-    });
+/**
+ * The functions directory of the store app, `src/store/convex` of this
+ * package. This file is `src/State.ts` in a checkout and a chunk in `lib/`
+ * in the installed package, which ships `src` too, so the directory is
+ * `../src/store/convex` from either place.
+ */
+export const storeDirectory = () =>
+  join(dirname(fileURLToPath(import.meta.url)), "..", "src", "store", "convex");
 
-    const read = <A>(
-      inMemory: Effect.Effect<A, StateStoreError>,
-      inConvex: Effect.Effect<A, StateStoreError>,
-    ) => Effect.suspend(() => (pending ? inMemory : inConvex));
-    const write = <A>(
-      inMemory: Effect.Effect<A, StateStoreError>,
-      inConvex: Effect.Effect<unknown, StateStoreError>,
-      result: A,
-    ) =>
-      Effect.suspend(() =>
-        pending ? Effect.tap(inMemory, () => flush) : Effect.as(inConvex, result),
-      );
+export interface StoreOptions {
+  /** Team slug or numeric team id of the `alchemy-state` project. */
+  readonly team: string | number;
+  readonly api: ManagementApiService;
+  readonly spawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
+  /** The key of the run is deleted when this scope closes. */
+  readonly scope: Scope.Scope;
+  /** The functions directory that an outdated store gets: {@link storeDirectory}. */
+  readonly store: string;
+}
 
+/**
+ * Pushes `store` to the production deployment of the state project with the
+ * installed Convex CLI: no typecheck, no codegen, the key only in the
+ * environment of the CLI.
+ */
+const pushStore = (
+  options: StoreOptions,
+  deployment: { readonly name: string; readonly deploymentUrl: string },
+) =>
+  Effect.gen(function* () {
+    const cli = yield* installedCli(join(options.store, ".."));
+    yield* Effect.logInfo(
+      `Convex state: pushing the store version ${STORE_VERSION} to ${deployment.name}`,
+    );
+    yield* withPushKey(options.api, deployment.name, PUSH_KEY_ACTIONS, (key) =>
+      push(options.spawner, key, {
+        deployment: deployment.name,
+        url: deployment.deploymentUrl,
+        source: {
+          path: options.store,
+          command: [...cli, "deploy", "--typecheck", "disable", "--codegen", "disable"],
+        },
+        env: {},
+        previousEnvNames: [],
+        adopt: false,
+        previewName: undefined,
+      }),
+    );
+  });
+
+/**
+ * The StateService over the `alchemy-state` project of the team: found or
+ * created, its store pushed when it is missing or older, and read and
+ * written with a key of this run.
+ */
+export const makeConvexState = (options: StoreOptions) =>
+  Effect.gen(function* () {
+    const { api, team } = options;
+    const teamId = yield* api.resolveTeamId(team);
+    const found = yield* findProjectByName(api, teamId, STORE_PROJECT_NAME);
+    const project =
+      found ??
+      (yield* Effect.logInfo(
+        `Convex state: creating the project ${STORE_PROJECT_NAME} in team ${team}`,
+      ).pipe(
+        Effect.andThen(
+          createProject(api, teamId, {
+            name: STORE_PROJECT_NAME,
+            deploymentType: "prod",
+            deploymentRegion: undefined,
+          }),
+        ),
+      ));
+    const deployment = yield* prodDeploymentOf(api, project.id);
+    if (deployment === undefined) {
+      return yield* new ProductionDeploymentNotFound({ projectId: project.id });
+    }
+
+    const key = yield* createDeployKey(api, deployment.name, "alchemy-state", RUN_KEY_ACTIONS);
+    yield* Scope.addFinalizer(options.scope, deleteDeployKey(api, deployment.name, key));
+    const functions = makeFunctionApi(deployment.deploymentUrl, key);
+
+    const version = yield* storeVersion(functions);
+    if (version === undefined || version < STORE_VERSION) {
+      // Code without `state:version` is another app with the name of the store.
+      if (version === undefined && deployment.lastDeployTime) {
+        return yield* failure(
+          `project ${STORE_PROJECT_NAME} (${project.id}) of team ${team} has code that is not the state store, and Convex.state does not push over it. Rename that project in the Convex dashboard.`,
+        );
+      }
+      yield* pushStore(options, deployment);
+      const pushed = yield* storeVersion(functions);
+      if (pushed !== STORE_VERSION) {
+        return yield* failure(
+          `${deployment.name} answers store version ${pushed ?? "none"} after the push of version ${STORE_VERSION}.`,
+        );
+      }
+    } else if (version > STORE_VERSION) {
+      return yield* failure(
+        `the store of team ${team} is version ${version}, and this version of @samebase/alchemy-convex knows version ${STORE_VERSION}. Upgrade @samebase/alchemy-convex; the store is never pushed back to an older version.`,
+      );
+    }
+
+    const remote = remoteOf(functions);
     const service: StateService = {
       id: "convex",
       getVersion: () => Effect.succeed(STATE_STORE_VERSION),
-      listStacks: () => read(memory.listStacks(), remote.listStacks()),
-      listStages: (stack) => read(memory.listStages(stack), remote.listStages(stack)),
-      list: (request) => read(memory.list(request), remote.list(request)),
-      get: (request) => read(memory.get(request), remote.get(request)),
-      getReplacedResources: (request) =>
-        read(memory.getReplacedResources(request), remote.getReplacedResources(request)),
-      getOutput: (request) => read(memory.getOutput(request), remote.getOutput(request)),
-      set: (request) => write(memory.set(request), remote.set(request), request.value),
-      delete: (request) => write(memory.delete(request), remote.delete(request), undefined),
-      deleteStack: (request) =>
-        write(memory.deleteStack(request), remote.deleteStack(request), undefined),
-      // Alchemy writes the stack output last, so state still in memory here is lost.
-      setOutput: (request) =>
-        write(memory.setOutput(request), remote.setOutput(request), request.value).pipe(
-          Effect.tap(() =>
-            pending
-              ? Effect.fail(
-                  failure(
-                    `the deployment of ${STATE_DEPLOY_KEY_ENV} has no ${COMPONENT_PATH} component at the end of the run, so this run saved no state. Mount @samebase/alchemy-convex/convex.config in convex/convex.config.ts.`,
-                  ),
-                )
-              : Effect.void,
-          ),
-        ),
+      listStacks: remote.listStacks,
+      listStages: remote.listStages,
+      list: remote.list,
+      get: remote.get,
+      getReplacedResources: remote.getReplacedResources,
+      getOutput: remote.getOutput,
+      set: (request) => remote.set(request).pipe(Effect.as(request.value)),
+      delete: (request) => remote.delete(request).pipe(Effect.asVoid),
+      deleteStack: (request) => remote.deleteStack(request).pipe(Effect.asVoid),
+      setOutput: (request) => remote.setOutput(request).pipe(Effect.as(request.value)),
     };
     return service;
   });
 
 /**
- * Alchemy state in the alchemyState component of the deployment that the
- * deploy key in CONVEX_STATE_DEPLOY_KEY names: the production deployment of
- * the project. The key needs the actions `deployment:data:view` and
- * `deployment:data:write`.
+ * Alchemy state in the `alchemy-state` project of `team`, with the team token
+ * in CONVEX_ACCESS_TOKEN or the Convex CLI login. The first use of the run
+ * finds or creates the project and pushes the store when it is missing or
+ * older. `alchemy plan` on another stack never touches Convex.
  */
-export const state = (): Layer.Layer<State> =>
+export const state = (options: {
+  readonly team: string | number;
+}): Layer.Layer<State, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Layer.effect(
     State,
     Effect.gen(function* () {
-      // The stack's ConfigProvider, for the read of the key on first use.
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const scope = yield* Scope.Scope;
+      // The stack's ConfigProvider, for the read of the token on first use.
       const context = yield* Effect.context<never>();
       return yield* Effect.cached(
         Effect.gen(function* () {
-          const key = yield* Config.Redacted(STATE_DEPLOY_KEY_ENV);
-          if (keyTargetOf(Redacted.value(key)).kind !== "deployment") {
-            return yield* failure(
-              `${STATE_DEPLOY_KEY_ENV} must be the deploy key of one deployment, such as prod:<name>|..., not a preview deploy key.`,
-            );
-          }
-          return yield* makeConvexState(makeFunctionApi(yield* urlForKey(key), key));
+          const api = yield* ManagementApi.pipe(
+            Effect.provide(ManagementApiLive().pipe(Layer.provide(fromConfig()))),
+          );
+          return yield* makeConvexState({
+            team: options.team,
+            api,
+            spawner,
+            scope,
+            store: storeDirectory(),
+          });
         }).pipe(Effect.provideContext(context), Effect.orDie),
       );
     }),

@@ -31,8 +31,7 @@
     ".": {
       "types": "./lib/index.d.ts",
       "import": "./lib/index.js"
-    },
-    "./convex.config": "./src/component/convex.config.ts"
+    }
   },
   "publishConfig": {
     "access": "public"

@@ -27,6 +27,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { createDeploymentClient } from "@convex-dev/platform";
+import type { paths } from "@convex-dev/platform/managementApi";
 import { hashDirectory } from "alchemy/Command/Memo";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
@@ -80,12 +81,19 @@ const sourceOf = (source: Source) =>
 /** Lifetime of a push key. Long enough for a slow push with index backfills. */
 export const PUSH_KEY_LIFETIME_MS = 2 * 60 * 60 * 1000;
 
-/** The only actions a push key gets. */
-const PUSH_KEY_ACTIONS = [
+/** An action of a deploy key, such as `deployment:deploy`, from the generated schema. */
+export type DeployKeyAction = NonNullable<
+  NonNullable<
+    paths["/deployments/{deployment_name}/create_deploy_key"]["post"]["requestBody"]
+  >["content"]["application/json"]["allowedActions"]
+>[number];
+
+/** The only actions a key for `convex deploy` gets. */
+export const PUSH_KEY_ACTIONS = [
   "deployment:deploy",
   "deployment:env:view",
   "deployment:env:write",
-] as const;
+] as const satisfies readonly DeployKeyAction[];
 
 /** POST /deployments/{deployment_name}/create_deploy_key */
 const CreatedDeployKey = Schema.Struct({ deployKey: Schema.String });
@@ -271,7 +279,7 @@ const CliManifest = Schema.Struct({
 });
 
 /** `[node, <convex bin>]` for the `convex` package that `cwd` resolves. Never downloads. */
-const installedCli = (cwd: string) =>
+export const installedCli = (cwd: string) =>
   Effect.tryPromise({
     try: async (): Promise<readonly [string, ...string[]]> => {
       const manifestPath = createRequire(join(cwd, "package.json")).resolve("convex/package.json");
@@ -361,57 +369,77 @@ const cliEnvironment = (home: string): Record<string, string | undefined> => ({
 });
 
 /**
+ * A deploy key of `deployment` that expires after PUSH_KEY_LIFETIME_MS, with
+ * only `allowedActions`, or every action when that is undefined. Delete it
+ * with {@link deleteDeployKey} when the work is done.
+ */
+export const createDeployKey = (
+  api: ManagementApiService,
+  deployment: string,
+  name: string,
+  allowedActions: readonly DeployKeyAction[] | undefined,
+) =>
+  Effect.gen(function* () {
+    const now = yield* Clock.currentTimeMillis;
+    const created = yield* api.request("create deploy key", (client) =>
+      client.POST("/deployments/{deployment_name}/create_deploy_key", {
+        params: { path: { deployment_name: deployment } },
+        body: {
+          name,
+          ...(allowedActions === undefined ? {} : { allowedActions: [...allowedActions] }),
+          expiresAt: now + PUSH_KEY_LIFETIME_MS,
+        },
+      }),
+    );
+    return Redacted.make(Schema.decodeUnknownSync(CreatedDeployKey)(created).deployKey);
+  });
+
+/**
+ * Deletes a key that {@link createDeployKey} made. The delete is skipped for
+ * a key that is the OAuth credential. A failed delete is logged: the key
+ * expires anyway.
+ */
+export const deleteDeployKey = (
+  api: ManagementApiService,
+  deployment: string,
+  key: Redacted.Redacted<string>,
+) =>
+  Effect.gen(function* () {
+    if (yield* api.isCredentialToken(Redacted.value(key))) return;
+    yield* absentAsUndefined(
+      retryIdempotentWrite(
+        api.requestVoid("delete deploy key", (client) =>
+          client.POST("/deployments/{deployment_name}/delete_deploy_key", {
+            params: { path: { deployment_name: deployment } },
+            body: { id: Redacted.value(key) },
+          }),
+        ),
+      ),
+    );
+  }).pipe(
+    Effect.catch((error) =>
+      Effect.logWarning(
+        `Convex.Deployment could not delete its key on ${deployment} (${error.message}). The key expires on its own within ${PUSH_KEY_LIFETIME_MS / 60_000} minutes.`,
+      ),
+    ),
+  );
+
+/**
  * Creates a deploy key for one push, runs `use` with it, and deletes it
- * afterwards. Without a push command, the key can only deploy and read and
- * write variables. The delete is skipped for a key that is the OAuth credential.
- * A failed delete is logged: the key expires anyway.
+ * afterwards, also after a failure. `allowedActions` is PUSH_KEY_ACTIONS for
+ * `convex deploy`, or undefined for a push command, which can do more than a
+ * push, such as the uploads of convex-hosting through `convex run`.
  */
 export const withPushKey = <A, E, R>(
   api: ManagementApiService,
   deployment: string,
-  source: Source | undefined,
+  allowedActions: readonly DeployKeyAction[] | undefined,
   use: (key: Redacted.Redacted<string>) => Effect.Effect<A, E, R>,
 ) =>
   Effect.acquireUseRelease(
-    Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis;
-      const created = yield* api.request("create deploy key", (client) =>
-        client.POST("/deployments/{deployment_name}/create_deploy_key", {
-          params: { path: { deployment_name: deployment } },
-          body: {
-            name: "alchemy-push",
-            // A push command can do more than a push, such as the uploads of
-            // convex-hosting through `convex run`, so its key has every action.
-            ...(source === undefined || sourceOf(source).command === undefined
-              ? { allowedActions: [...PUSH_KEY_ACTIONS] }
-              : {}),
-            expiresAt: now + PUSH_KEY_LIFETIME_MS,
-          },
-        }),
-      );
-      return Redacted.make(Schema.decodeUnknownSync(CreatedDeployKey)(created).deployKey);
-    }),
+    createDeployKey(api, deployment, "alchemy-push", allowedActions),
     use,
-    (key) =>
-      Effect.gen(function* () {
-        if (yield* api.isCredentialToken(Redacted.value(key))) return;
-        yield* absentAsUndefined(
-          retryIdempotentWrite(
-            api.requestVoid("delete deploy key", (client) =>
-              client.POST("/deployments/{deployment_name}/delete_deploy_key", {
-                params: { path: { deployment_name: deployment } },
-                body: { id: Redacted.value(key) },
-              }),
-            ),
-          ),
-        );
-      }).pipe(
-        Effect.catch((error) =>
-          Effect.logWarning(
-            `Convex.Deployment could not delete its push key on ${deployment} (${error.message}). The key expires on its own within ${PUSH_KEY_LIFETIME_MS / 60_000} minutes.`,
-          ),
-        ),
-      ),
+    (key) => deleteDeployKey(api, deployment, key),
   );
 
 /** Every variable of the deployment with its value. */
