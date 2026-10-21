@@ -139,6 +139,9 @@ export class FakeConvex {
   private readonly createdSecrets = new Map<string, string[]>();
   /** Page size of GET /teams/{team_id}/projects. */
   pageSize = 100;
+  /** The bearer value that the fake takes for a team access token of `teamTokenTeamId`. Every other bearer is the Convex CLI login. */
+  teamToken = "team-token";
+  teamTokenTeamId = 38516;
   /** Rows that GET /teams/{team_id}/projects leaves out while this is above zero, one call at a time. */
   hideProjectsFromListings = 0;
   /**
@@ -296,6 +299,18 @@ export class FakeConvex {
       return this.deploymentApi(deployment, method, url, body);
     }
     const bearer = authorization.replace(/^Bearer /, "");
+    // Measured: a team access token names its team in /token_details and
+    // cannot list teams; the Convex CLI login lists teams and gets 403 there.
+    if (method === "GET" && url.pathname === "/v1/token_details") {
+      return bearer === this.teamToken
+        ? json(200, { ...recorded("token_details_team_token.json"), teamId: this.teamTokenTeamId })
+        : json(403, recorded("token_details_cli_login.json"));
+    }
+    if (method === "GET" && url.pathname === "/api/dashboard/teams") {
+      return bearer === this.teamToken
+        ? json(403, recorded("dashboard_teams_team_token.json"))
+        : json(200, fixture("dashboard_teams_cli_login.json"));
+    }
     const route = `${method} ${url.pathname.replace(/\/\d+(?=\/|$)/g, "/{id}")}`;
     const id = Number(/\/(\d+)(?:\/|$)/.exec(url.pathname)?.[1]);
     const deployment = /^\/v1\/deployments\/([^/]+)\//.exec(url.pathname)?.[1] ?? "";

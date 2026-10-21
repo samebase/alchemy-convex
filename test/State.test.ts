@@ -297,6 +297,33 @@ describe("Convex.state", () => {
     );
   });
 
+  it("needs no team with a team access token, which names its team", async () => {
+    const fake = new FakeConvex().install();
+    const deployment =
+      fake.project(fake.addProject({ name: STORE_PROJECT_NAME, teamId: TEAM }))
+        ?.prodDeploymentName ?? "";
+    fake.addStore(deployment, STORE_VERSION);
+    const service = await run(
+      Effect.gen(function* () {
+        return yield* yield* State;
+      }).pipe(
+        Effect.provide(state()),
+        Effect.provide(NodeServices.layer),
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromEnvRecord({ CONVEX_ACCESS_TOKEN: fake.teamToken }),
+          ),
+        ),
+        Effect.scoped,
+      ),
+    );
+    expect(await run(service.listStacks())).toEqual([]);
+    expect(fake.lines().slice(0, 2)).toEqual([
+      "GET api.convex.dev/v1/token_details",
+      `GET api.convex.dev/v1/teams/${TEAM}/projects`,
+    ]);
+  });
+
   it("reads CONVEX_ACCESS_TOKEN through the stack's ConfigProvider", async () => {
     const fake = new FakeConvex().install();
     const deployment =

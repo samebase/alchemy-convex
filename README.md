@@ -107,8 +107,10 @@ export default Alchemy.Stack(
 );
 ```
 
-Every run needs the team token in `CONVEX_ACCESS_TOKEN`, or the Convex CLI login on a laptop. The
-first run of a team creates the project `alchemy-state` and pushes the store functions to its
+Every run needs the team token in `CONVEX_ACCESS_TOKEN`, or the Convex CLI login on a laptop. A
+team access token names its team, so `Convex.state()` needs no `team` with one, and a `team` that
+is set is a label; the Convex CLI login needs the slug or the id. The first run of a team creates
+the project `alchemy-state` and pushes the store functions to its
 production deployment with the Convex CLI of the app; a later version of this package pushes a
 newer store when it finds an older one, and never an older one over a newer one. Each run makes a
 deploy key of that deployment that can only run the store's internal functions, and deletes it at

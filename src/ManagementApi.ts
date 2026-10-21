@@ -69,8 +69,15 @@ export interface ManagementApiService {
     deployKey: Redacted.Redacted<string>,
     run: (client: DeploymentClient) => Promise<FetchResult<T>>,
   ) => Effect.Effect<T, ConvexApiError>;
-  /** Team id for a slug or numeric id. */
-  readonly resolveTeamId: (team: string | number) => Effect.Effect<number, ConvexApiError>;
+  /**
+   * Team id for a numeric id, a slug, or nothing. A team access token names
+   * its team (`GET /token_details`), and a slug is then a label only. The
+   * Convex CLI login and a personal token answer 403 there, so a slug goes to
+   * the dashboard's team list, and nothing is an error.
+   */
+  readonly resolveTeamId: (
+    team: string | number | undefined,
+  ) => Effect.Effect<number, ConvexApiError>;
   /**
    * True when a deploy key that Convex returned carries the token of the
    * Management API credential itself. With an OAuth token, create_deploy_key
@@ -179,6 +186,12 @@ export const absentAsUndefined = <A, R>(
 const TeamRow = Schema.Struct({ id: Schema.Number, slug: Schema.String });
 const TeamRows = Schema.Array(TeamRow);
 
+/** GET /token_details: the team of a team token, or the project of a project token. */
+const TokenDetails = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("teamToken"), teamId: Schema.Number }),
+  Schema.Struct({ type: Schema.Literal("projectToken"), projectId: Schema.Number }),
+]);
+
 /** The service for one way to get the bearer token. */
 const makeService = (credentials: Effect.Effect<ResolvedCredentials>): ManagementApiService => {
   const client = Effect.cached(
@@ -203,13 +216,47 @@ const makeService = (credentials: Effect.Effect<ResolvedCredentials>): Managemen
       run(createDeploymentClient(deploymentUrlOrName, Redacted.value(deployKey))),
     );
 
+  // Measured: a team access token answers `GET /token_details` with its
+  // team id and gets HTTP 403 from the dashboard's team list; the Convex CLI
+  // login answers the team list and gets HTTP 403 `NotOAuthTeamToken` from
+  // token_details. Read once for each service.
+  // `Effect.cached` only allocates the cache, so runSync makes one for this service.
+  const tokenDetails = Effect.runSync(
+    Effect.cached(
+      request("get token details", (c) => c.GET("/token_details")).pipe(
+        Effect.map((body) => Schema.decodeUnknownSync(TokenDetails)(body)),
+        Effect.catchIf(
+          (error) => error.status === 403,
+          () => Effect.succeed(undefined),
+        ),
+      ),
+    ),
+  );
+
   // The Management API addresses teams by numeric id. The only slug lookup
   // it offers is per project, so a slug falls back to the dashboard's team
   // list, which is unofficial. Pass the numeric team id to skip this.
   const resolveTeamId: ManagementApiService["resolveTeamId"] = (team) =>
     Effect.gen(function* () {
       if (typeof team === "number") return team;
-      if (/^\d+$/.test(team)) return Number(team);
+      if (team !== undefined && /^\d+$/.test(team)) return Number(team);
+      const details = yield* tokenDetails;
+      if (details?.type === "teamToken") return details.teamId;
+      if (details?.type === "projectToken") {
+        return yield* new ConvexApiError({
+          operation: "resolve team",
+          status: 403,
+          message: `the access token belongs to project ${details.projectId}, and a project token cannot create projects. Use a team access token.`,
+        });
+      }
+      if (team === undefined) {
+        return yield* new ConvexApiError({
+          operation: "resolve team",
+          status: 0,
+          message:
+            "set team to the slug or the id of the Convex team: this access token does not name a team.",
+        });
+      }
       const resolved = yield* credentials;
       const rows = yield* Effect.tryPromise({
         try: async () => {

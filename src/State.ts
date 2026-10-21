@@ -233,8 +233,8 @@ export const storeDirectory = () =>
   join(dirname(fileURLToPath(import.meta.url)), "..", "src", "store", "convex");
 
 export interface StoreOptions {
-  /** Team slug or numeric team id of the `alchemy-state` project. */
-  readonly team: string | number;
+  /** Team slug or numeric team id of the `alchemy-state` project, or undefined with a team access token, which names its team. */
+  readonly team: string | number | undefined;
   readonly api: ManagementApiService;
   readonly spawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
   /** The key of the run is deleted when this scope closes. */
@@ -313,8 +313,9 @@ const createStoreProject = (api: ManagementApiService, teamId: number, team: str
  */
 export const makeConvexState = (options: StoreOptions) =>
   Effect.gen(function* () {
-    const { api, team } = options;
-    const teamId = yield* api.resolveTeamId(team);
+    const { api } = options;
+    const teamId = yield* api.resolveTeamId(options.team);
+    const team = options.team ?? teamId;
     const found = yield* findProjectByName(api, teamId, STORE_PROJECT_NAME);
     const project = found ?? (yield* createStoreProject(api, teamId, team));
     const deployment = yield* prodDeploymentOf(api, project.id);
@@ -403,13 +404,15 @@ export const makeConvexState = (options: StoreOptions) =>
 
 /**
  * Alchemy state in the `alchemy-state` project of `team`, with the team token
- * in CONVEX_ACCESS_TOKEN or the Convex CLI login. The first use of the run
- * finds or creates the project and pushes the store when it is missing or
- * older. `alchemy plan` on another stack never touches Convex.
+ * in CONVEX_ACCESS_TOKEN or the Convex CLI login. A team access token names
+ * its team, so `team` is optional with one; the Convex CLI login needs the
+ * slug or the id. The first use of the run finds or creates the project and
+ * pushes the store when it is missing or older. `alchemy plan` on another
+ * stack never touches Convex.
  */
-export const state = (options: {
-  readonly team: string | number;
-}): Layer.Layer<State, never, ChildProcessSpawner.ChildProcessSpawner> =>
+export const state = (
+  options: { readonly team?: string | number } = {},
+): Layer.Layer<State, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Layer.effect(
     State,
     Effect.gen(function* () {
