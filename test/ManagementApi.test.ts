@@ -122,11 +122,14 @@ describe("ManagementApi.resolveTeamId", () => {
     expect(fake.sent).toEqual([]);
   });
 
-  it("takes the team of a team access token, with or without a slug, read once", async () => {
+  // The recorded project payload carries the team slug samebase-live-tests (522530).
+  it("takes the team of a team access token, with the slug checked against its projects", async () => {
     const fake = new FakeConvex().install();
+    fake.teamTokenTeamId = 522530;
+    fake.addProject({ name: "app", teamId: 522530 });
     const both = Effect.gen(function* () {
       const api = yield* ManagementApi;
-      return [yield* api.resolveTeamId("nicu"), yield* api.resolveTeamId(undefined)];
+      return [yield* api.resolveTeamId(undefined), yield* api.resolveTeamId("samebase-live-tests")];
     }).pipe(
       Effect.provide(
         ManagementApiLive().pipe(
@@ -134,8 +137,24 @@ describe("ManagementApi.resolveTeamId", () => {
         ),
       ),
     );
-    expect(await Effect.runPromise(both)).toEqual([38516, 38516]);
-    expect(fake.lines()).toEqual(["GET api.convex.dev/v1/token_details"]);
+    expect(await Effect.runPromise(both)).toEqual([522530, 522530]);
+    expect(fake.lines()).toEqual([
+      "GET api.convex.dev/v1/token_details",
+      "GET api.convex.dev/v1/teams/522530/projects",
+    ]);
+  });
+
+  it("refuses a slug of another team, and a slug that a team without projects cannot check", async () => {
+    const fake = new FakeConvex().install();
+    fake.teamTokenTeamId = 522530;
+    expect(await failureOf(resolve(fake.teamToken, "samebase-live-tests"))).toContain(
+      "team 522530 has no project yet. Set team to 522530",
+    );
+    fake.addProject({ name: "app", teamId: 522530 });
+    expect(await failureOf(resolve(fake.teamToken, "nicu"))).toContain(
+      'belongs to team 522530 ("samebase-live-tests"), and team is "nicu"',
+    );
+    expect(fake.projects).toHaveLength(1);
   });
 
   it("looks a slug up in the dashboard's team list for the Convex CLI login", async () => {

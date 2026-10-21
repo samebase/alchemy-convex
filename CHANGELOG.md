@@ -6,8 +6,10 @@ A team access token works. 0.6.0 resolved a team slug through the dashboard's te
 team access token cannot read (HTTP 403 `NotAllowed`), so every run with `CONVEX_ACCESS_TOKEN` from
 the dashboard failed with `team lookup for "<slug>" failed with HTTP 403`.
 
-- `resolveTeamId` reads `GET /token_details` first. A team access token names its team there, and a
-  configured slug is then a label only. The Convex CLI login and a personal token get HTTP 403
+- `resolveTeamId` reads `GET /token_details` first. A team access token names its team there; a
+  configured slug is checked against the `teamSlug` of the team's projects, so a token of another
+  team fails the run instead of putting resources and state into its own team, and a team without
+  a project asks for the numeric id. The Convex CLI login and a personal token get HTTP 403
   `NotOAuthTeamToken` from it and keep the slug lookup in the dashboard's team list. A project
   access token is refused with the reason.
 - `Convex.state()` takes no `team` with a team access token. `Convex.Project` still needs `team`.

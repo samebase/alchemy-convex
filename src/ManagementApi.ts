@@ -71,7 +71,8 @@ export interface ManagementApiService {
   ) => Effect.Effect<T, ConvexApiError>;
   /**
    * Team id for a numeric id, a slug, or nothing. A team access token names
-   * its team (`GET /token_details`), and a slug is then a label only. The
+   * its team (`GET /token_details`); a slug is then checked against the
+   * `teamSlug` of the team's projects, so a token of another team fails. The
    * Convex CLI login and a personal token answer 403 there, so a slug goes to
    * the dashboard's team list, and nothing is an error.
    */
@@ -186,6 +187,11 @@ export const absentAsUndefined = <A, R>(
 const TeamRow = Schema.Struct({ id: Schema.Number, slug: Schema.String });
 const TeamRows = Schema.Array(TeamRow);
 
+/** The first page of GET /teams/{team_id}/projects: every row carries the slug of the team. */
+const ProjectSlugRows = Schema.Struct({
+  items: Schema.Array(Schema.Struct({ teamSlug: Schema.String })),
+});
+
 /** GET /token_details: the team of a team token, or the project of a project token. */
 const TokenDetails = Schema.Union([
   Schema.Struct({ type: Schema.Literal("teamToken"), teamId: Schema.Number }),
@@ -233,6 +239,14 @@ const makeService = (credentials: Effect.Effect<ResolvedCredentials>): Managemen
     ),
   );
 
+  /** The slug of the team, from the first project of its listing, or undefined for a team without one. Read once. */
+  const teamSlug = (teamId: number) =>
+    request("list projects", (c) =>
+      c.GET("/teams/{team_id}/projects", { params: { path: { team_id: teamId } } }),
+    ).pipe(
+      Effect.map((body) => Schema.decodeUnknownSync(ProjectSlugRows)(body).items[0]?.teamSlug),
+    );
+
   // The Management API addresses teams by numeric id. The only slug lookup
   // it offers is per project, so a slug falls back to the dashboard's team
   // list, which is unofficial. Pass the numeric team id to skip this.
@@ -241,7 +255,28 @@ const makeService = (credentials: Effect.Effect<ResolvedCredentials>): Managemen
       if (typeof team === "number") return team;
       if (team !== undefined && /^\d+$/.test(team)) return Number(team);
       const details = yield* tokenDetails;
-      if (details?.type === "teamToken") return details.teamId;
+      if (details?.type === "teamToken") {
+        if (team === undefined) return details.teamId;
+        // The Management API has no team-by-id call, so the slug of the
+        // team comes from any of its projects. A team without a project
+        // cannot be checked: the numeric id, or no team, is the fix.
+        const slug = yield* teamSlug(details.teamId);
+        if (slug === undefined) {
+          return yield* new ConvexApiError({
+            operation: "resolve team",
+            status: 0,
+            message: `team "${team}" cannot be checked against the access token: team ${details.teamId} has no project yet. Set team to ${details.teamId}, or leave it out.`,
+          });
+        }
+        if (slug !== team) {
+          return yield* new ConvexApiError({
+            operation: "resolve team",
+            status: 403,
+            message: `the access token belongs to team ${details.teamId} ("${slug}"), and team is "${team}". Use a token of "${team}", or set team to ${details.teamId}.`,
+          });
+        }
+        return details.teamId;
+      }
       if (details?.type === "projectToken") {
         return yield* new ConvexApiError({
           operation: "resolve team",

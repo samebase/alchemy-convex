@@ -105,6 +105,7 @@ CLI login and no `CONVEX_ACCESS_TOKEN`. The store deployment is `artful-alligato
   store can push in the order new, then old, in the seconds between the second read of the version
   and the end of the push; the next run of the newer package pushes its store again. The upgrade
   happens once for each new package version in a team.
-- A team access token is not measured here: the laptop proof used the Convex CLI login, which the
-  Management API takes the same way. The first CI run of `samebase/base-alchemy` with
-  `CONVEX_ACCESS_TOKEN` is the measurement.
+- A team access token (0.6.1): `GET /token_details` names its team, and the dashboard's team list
+  answers it HTTP 403, so a slug is checked against the `teamSlug` of the team's projects instead;
+  a team without a project needs the numeric id. Measured with a temporary team token on a
+  temporary stack: bootstrap, project create, push, index read, and destroy.
