@@ -67,3 +67,16 @@ Facts learned then: a production deploy key gets `UnexpectedAuthHeaderFormat` (4
 Management API, and its `deployment_info` needs `deployment:data:view`; a preview deploy key reads
 its project and creates, gets, and deletes its preview deployments on the Management API, but cannot
 create a deploy key or use the deployment API.
+
+The token files were captured on 2026-10-21 with a temporary team access token
+`tmp-0485-token-details` of team `nicu` (deleted at the end of the run) and the Convex CLI login:
+
+| File | Endpoint |
+| --- | --- |
+| token_details_team_token.json | GET /token_details with a team access token (200) |
+| token_details_cli_login.json | GET /token_details with the Convex CLI login (403 `NotOAuthTeamToken`) |
+| dashboard_teams_cli_login.json | GET https://api.convex.dev/api/dashboard/teams with the Convex CLI login (200, referral codes replaced) |
+| dashboard_teams_team_token.json | the same with a team access token (403 `NotAllowed`) |
+
+Facts learned: a team access token names its team only through `/token_details`; it cannot list
+teams. The Convex CLI login lists teams and gets 403 from `/token_details`.

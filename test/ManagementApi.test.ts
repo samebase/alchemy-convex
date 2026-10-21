@@ -3,8 +3,9 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { fromValues } from "../src/Credentials.ts";
+import { FakeConvex } from "./fakeConvex.ts";
 import {
   ConvexApiError,
   isRetryableWriteError,
@@ -94,5 +95,78 @@ describe("isCredentialToken", () => {
 
   it("does not match a key with a token of its own", async () => {
     expect(await withCredential("team:samebase-live-tests|other", deployKey)).toBe(false);
+  });
+});
+
+describe("ManagementApi.resolveTeamId", () => {
+  const resolve = (token: string, team: string | number | undefined) =>
+    Effect.gen(function* () {
+      const api = yield* ManagementApi;
+      return yield* api.resolveTeamId(team);
+    }).pipe(
+      Effect.provide(
+        ManagementApiLive().pipe(Layer.provide(fromValues({ accessToken: Redacted.make(token) }))),
+      ),
+    );
+  const failureOf = (effect: Effect.Effect<number, ConvexApiError>) =>
+    Effect.runPromise(Effect.flip(effect)).then((error) => error.message);
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("uses a numeric id as it is, with no request", async () => {
+    const fake = new FakeConvex().install();
+    expect(await Effect.runPromise(resolve("cli-login", 38516))).toBe(38516);
+    expect(await Effect.runPromise(resolve("cli-login", "38516"))).toBe(38516);
+    expect(fake.sent).toEqual([]);
+  });
+
+  // The recorded project payload carries the team slug samebase-live-tests (522530).
+  it("takes the team of a team access token, with the slug checked against its projects", async () => {
+    const fake = new FakeConvex().install();
+    fake.teamTokenTeamId = 522530;
+    fake.addProject({ name: "app", teamId: 522530 });
+    const both = Effect.gen(function* () {
+      const api = yield* ManagementApi;
+      return [yield* api.resolveTeamId(undefined), yield* api.resolveTeamId("samebase-live-tests")];
+    }).pipe(
+      Effect.provide(
+        ManagementApiLive().pipe(
+          Layer.provide(fromValues({ accessToken: Redacted.make(fake.teamToken) })),
+        ),
+      ),
+    );
+    expect(await Effect.runPromise(both)).toEqual([522530, 522530]);
+    expect(fake.lines()).toEqual([
+      "GET api.convex.dev/v1/token_details",
+      "GET api.convex.dev/v1/teams/522530/projects",
+    ]);
+  });
+
+  it("refuses a slug of another team, and a slug that a team without projects cannot check", async () => {
+    const fake = new FakeConvex().install();
+    fake.teamTokenTeamId = 522530;
+    expect(await failureOf(resolve(fake.teamToken, "samebase-live-tests"))).toContain(
+      "team 522530 has no project yet. Set team to 522530",
+    );
+    fake.addProject({ name: "app", teamId: 522530 });
+    expect(await failureOf(resolve(fake.teamToken, "nicu"))).toContain(
+      'belongs to team 522530 ("samebase-live-tests"), and team is "nicu"',
+    );
+    expect(fake.projects).toHaveLength(1);
+  });
+
+  it("looks a slug up in the dashboard's team list for the Convex CLI login", async () => {
+    const fake = new FakeConvex().install();
+    expect(await Effect.runPromise(resolve("cli-login", "nicu"))).toBe(38516);
+    expect(fake.lines()).toEqual([
+      "GET api.convex.dev/v1/token_details",
+      "GET api.convex.dev/api/dashboard/teams",
+    ]);
+    expect(await failureOf(resolve("cli-login", "no-such-team"))).toContain(
+      'no team with slug "no-such-team"',
+    );
+    expect(await failureOf(resolve("cli-login", undefined))).toContain("set team to the slug");
   });
 });
