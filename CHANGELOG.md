@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.8.0 (unreleased)
+
+`Convex.Deployment` takes `rootDir`: the app directory, relative to the directory where the deploy
+runs (the directory of the stack file), `"."` by default. The push runs in it, and `source` and
+`source.include` are relative to it. State always holds it, `"."` included, so a reader of the
+state places each deployment under its app folder, with the same rule as a Cloudflare Worker.
+
+- Breaking: the push no longer runs in the nearest directory above `source` with a package.json. A
+  stack file outside the app directory needs `rootDir`, such as
+  `{ rootDir: "apps/web", source: "./convex" }` in place of `{ source: "apps/web/convex" }`.
+  Without it, the plan stops with `SourceMismatch` before any change. A stack file in the app
+  directory needs no change.
+- `rootDir` must be relative (`AbsoluteRootDir`) and must have a package.json
+  (`ConvexAppNotFound`, which has the field `rootDir` in place of `source`). `SourceMismatch`
+  names the app directory too. The source checks also run in the plan, so a wrong `rootDir` stops
+  the run before Alchemy writes the new props to state.
+- The first run after the upgrade plans one `update` for each `Convex.Deployment`, which writes
+  `rootDir` to its state row. When the app directory did not move, the update changes nothing in
+  Convex: no push, no deploy key, only reads. The lockfile is part of the content hash, so when the
+  upgrade changed the lockfile, that run also pushes the same functions once.
+- `Convex.Deployment` is a function over the resource class that writes `rootDir` into the props.
+  It keeps `Type`, `Provider`, and `ref`. It takes `rootDir` as a plain string and the props as
+  an object, not as an Effect. `Convex.DeploymentInput` is the type of its props.
+- `Convex.state()` passes the directory of its store as `rootDir` to the push. The store, its
+  version, and its function names do not change.
+
 ## 0.7.0 (unreleased)
 
 The stage output records its run. `Convex.state()` stores the stack's output plus the key

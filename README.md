@@ -69,6 +69,28 @@ deployment if it has code, only with `--adopt`.
 it stays until Convex deletes it at expiry (14 days by default).
 [`examples/app/alchemy.run.ts`](examples/app/alchemy.run.ts) is the same stack.
 
+### The stack file at the repository root
+
+`rootDir` is the app directory, relative to the directory where `alchemy deploy` runs, which is
+the directory of the stack file. The default is `"."`. The push runs in `rootDir`, and `source` is
+relative to it:
+
+```ts
+Effect.gen(function* () {
+  const project = yield* Convex.Project("Project", { team: "my-team", slug: "my-app" });
+  const backend = yield* Convex.Deployment("Backend", {
+    project,
+    type: "prod",
+    rootDir: "apps/web", // the Convex app, with its package.json
+    source: "./convex", // apps/web/convex
+  });
+  return { convexUrl: backend.url };
+});
+```
+
+State always holds `rootDir`, `"."` included, so a reader of the state finds the app directory of
+each deployment.
+
 ## Credentials
 
 Credentials are a layer, never props, so they do not go into Alchemy state. `Convex.providers()`
@@ -160,25 +182,28 @@ call.
   taken over with `--adopt`; it never creates or renames a project. Outputs `projectId`, `slug`,
   `name`, `teamId`, `prodDeploymentName`, `prodDeploymentUrl`.
 - `Convex.Deployment`: `{ project, type: "prod" }` or `{ project, type: "dev" | "preview", name }`,
-  each with optional `source` and `env`. Outputs `name` (such as `happy-animal-123`), `url`,
-  `siteUrl`, `type`, `projectId`, `reference`, `previewName`, `hash`, and `envNames`.
+  each with optional `rootDir`, `source`, and `env`. Outputs `name` (such as `happy-animal-123`),
+  `url`, `siteUrl`, `type`, `projectId`, `reference`, `previewName`, `hash`, and `envNames`.
   - `prod` is the project's default production deployment (with a deploy key: the key's
     production deployment). The resource never creates or deletes one. A production deployment
     with code that is not in state is taken over only with `--adopt`.
   - `dev` creates a dev deployment with `name` as its reference; `preview` creates a preview
     deployment with `name` as its preview name. An expired preview is created again on the next
     deploy.
-  - `source` is the Convex functions directory: `convex/`, or the `functions` field of
-    convex.json (`SourceMismatch`). The CLI runs in the nearest directory above it with a
-    package.json, with the Node.js that runs Alchemy, and is never downloaded (`ConvexCliNotFound`).
-  - The content identity is a hash of every file of that app directory that git does not ignore,
-    the nearest lockfile, the deployment name, and `env`. The same hash is a no-op. Otherwise the
-    update sets `env`, then pushes. A failed push sets the changed variables back, and deletes a
-    dev or preview deployment that the same run created.
+  - `rootDir` is the app directory, relative to the directory where the deploy runs, `"."` by
+    default. It must be relative (`AbsoluteRootDir`) and have a package.json (`ConvexAppNotFound`).
+    There is no search in the directories above it.
+  - `source` is the Convex functions directory relative to `rootDir`: `convex/`, or the `functions`
+    field of convex.json (`SourceMismatch`). The CLI runs in `rootDir`, with the Node.js that runs
+    Alchemy, and is never downloaded (`ConvexCliNotFound`).
+  - The content identity is a hash of every file of `rootDir` that git does not ignore, the nearest
+    lockfile, the deployment name, and `env`. The same hash is a no-op. Otherwise the update sets
+    `env`, then pushes. A failed push sets the changed variables back, and deletes a dev or preview
+    deployment that the same run created.
   - `env` values are strings or secrets such as `Config.Redacted("AUTH_SECRET")`. A name that
     leaves `env` is removed from the deployment.
-  - `source: { path, command?, include? }` replaces `convex deploy` with `command`, run in the app
-    directory with the push key in `CONVEX_DEPLOY_KEY`, such as
+  - `source: { path, command?, include? }` replaces `convex deploy` with `command`, run in `rootDir`
+    with the push key in `CONVEX_DEPLOY_KEY`, such as
     `["node_modules/.bin/convex-hosting", "deploy", "--build", "node_modules/.bin/vp build", "--dist", "dist/client"]`.
     The command must push with `convex deploy` (convex-hosting does, through `--cmd`). `include`
     narrows the hash to `path`, package.json, convex.json, the lockfile, and the listed globs, such
@@ -215,8 +240,8 @@ call.
 
 - `env` values are props, so Alchemy state holds them. Keep `.alchemy/` git-ignored, and use an
   encrypted state store, such as `Cloudflare.state()`, in CI.
-- The hash does not see a change in a workspace package outside the app directory, or a push from
-  outside Alchemy. Change a file of the app to push again.
+- The hash does not see a change in a workspace package outside `rootDir`, or a push from outside
+  Alchemy. Change a file of the app to push again.
 - With a deploy key, the provider reaches the deployment at `https://<name>.convex.cloud`, so the
   deployment must answer there.
 - A run that stops between a deployment create and the state write leaves a deployment that state
