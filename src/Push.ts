@@ -48,13 +48,14 @@ import {
 export type EnvValue = string | Redacted.Redacted<string>;
 
 /**
- * The `source` prop: the Convex functions directory, such as `./convex`, or
- * that directory with a push command and more files for the content identity.
+ * The `source` prop: the Convex functions directory relative to the app
+ * directory (`rootDir`), such as `./convex`, or that directory with a push
+ * command and more files for the content identity.
  */
 export type Source =
   | string
   | {
-      /** The Convex functions directory, such as `./convex`. */
+      /** The Convex functions directory relative to the app directory, such as `./convex`. */
       readonly path: string;
       /**
        * Replaces `convex deploy`: a program and its arguments, run in the app
@@ -109,17 +110,20 @@ export class ConvexCliNotFound extends Schema.TaggedError<ConvexCliNotFound>()(
   { cwd: Schema.String },
 ) {
   override get message() {
-    return `Convex.Deployment found no installed convex package from ${this.cwd}, and it does not download one. Install convex in the app (npm install convex), or set source to the functions directory of the app.`;
+    return `Convex.Deployment found no installed convex package from ${this.cwd}, and it does not download one. Install convex in the app (npm install convex), or set rootDir to the directory of the app.`;
   }
 }
 
-/** No directory at or above the parent of `source` has a package.json. */
+/** The app directory (`rootDir`) has no package.json. */
 export class ConvexAppNotFound extends Schema.TaggedError<ConvexAppNotFound>()(
   "ConvexAppNotFound",
-  { source: Schema.String },
+  {
+    /** The app directory, resolved against the working directory of the deploy. */
+    rootDir: Schema.String,
+  },
 ) {
   override get message() {
-    return `Convex.Deployment found no package.json at or above the parent of ${this.source}. Set source to the functions directory of a Convex app, such as "./convex".`;
+    return `Convex.Deployment found no package.json in ${this.rootDir}. Set rootDir to the directory of the Convex app, relative to the directory where the deploy runs, such as "apps/web".`;
   }
 }
 
@@ -227,32 +231,27 @@ const outputTail = (text: string, secrets: readonly string[]) =>
 
 const valueOf = (value: EnvValue) => (Redacted.isRedacted(value) ? Redacted.value(value) : value);
 
-/** The app directory: the nearest directory at or above the parent of `source` with a package.json. */
-const appDirectoryOf = (source: string) =>
-  Effect.tryPromise({
-    try: async () => {
-      let directory = dirname(resolve(source));
-      while (true) {
-        try {
-          await access(join(directory, "package.json"));
-          return directory;
-        } catch {
-          const parent = dirname(directory);
-          if (parent === directory) throw new Error("no package.json");
-          directory = parent;
-        }
-      }
-    },
-    catch: () => new ConvexAppNotFound({ source }),
+/**
+ * The app directory: `rootDir` resolved against the working directory of the
+ * deploy. It must have a package.json. There is no search above it.
+ */
+const appDirectoryOf = (rootDir: string) => {
+  const directory = resolve(rootDir);
+  return Effect.tryPromise({
+    try: () => access(join(directory, "package.json")).then(() => directory),
+    catch: () => new ConvexAppNotFound({ rootDir: directory }),
   });
+};
 
-/** `source` is not the functions directory that the Convex CLI pushes from this app. */
+/** `source` is not the functions directory that the Convex CLI pushes from the app directory. */
 export class SourceMismatch extends Schema.TaggedError<SourceMismatch>()("SourceMismatch", {
+  /** The app directory, resolved. */
+  rootDir: Schema.String,
   source: Schema.String,
   functions: Schema.String,
 }) {
   override get message() {
-    return `Convex.Deployment source is ${this.source}, but the Convex CLI pushes ${this.functions} in this app (the "functions" field of convex.json, or convex/ by default). Set source to ${this.functions}.`;
+    return `Convex.Deployment source is ${this.source}, but the Convex CLI pushes ${this.functions} from the app directory ${this.rootDir} (the "functions" field of convex.json, or convex/ by default). Set rootDir to the directory of the Convex app, and source to its functions directory relative to rootDir, such as "./convex".`;
   }
 }
 
@@ -269,8 +268,8 @@ const checkFunctionsDirectory = (cwd: string, path: string) =>
         ? undefined
         : Schema.decodeUnknownSync(Schema.fromJsonString(ConvexJson))(text).functions;
     const functions = resolve(cwd, configured ?? "convex");
-    if (functions !== resolve(path)) {
-      return yield* new SourceMismatch({ source: resolve(path), functions });
+    if (functions !== path) {
+      return yield* new SourceMismatch({ rootDir: cwd, source: path, functions });
     }
   });
 
@@ -300,6 +299,8 @@ export const installedCli = (cwd: string) =>
  * A change in a workspace package outside the app directory is not seen.
  */
 export const pushHash = (options: {
+  /** The app directory, relative to the working directory of the deploy or absolute. */
+  readonly rootDir: string;
   readonly source: Source | undefined;
   readonly deployment: string;
   readonly env: Readonly<Record<string, EnvValue>>;
@@ -309,7 +310,7 @@ export const pushHash = (options: {
     const files =
       source === undefined
         ? undefined
-        : yield* appDirectoryOf(source.path).pipe(
+        : yield* appDirectoryOf(options.rootDir).pipe(
             Effect.flatMap((cwd) =>
               hashDirectory({
                 cwd,
@@ -322,7 +323,7 @@ export const pushHash = (options: {
                     ? {}
                     : {
                         include: [
-                          `${relative(cwd, resolve(source.path)).split("\\").join("/")}/**`,
+                          `${relative(cwd, resolve(cwd, source.path)).split("\\").join("/")}/**`,
                           "package.json",
                           "convex.json",
                           ...source.include,
@@ -469,7 +470,9 @@ export interface PushOptions {
   readonly deployment: string;
   /** Client URL of the deployment. */
   readonly url: string;
-  /** The functions directory, or it with a push command. Without it, only the variables change. */
+  /** The app directory, relative to the working directory of the deploy or absolute. The push runs in it. */
+  readonly rootDir: string;
+  /** The functions directory relative to `rootDir`, or it with a push command. Without it, only the variables change. */
   readonly source: Source | undefined;
   readonly env: Readonly<Record<string, EnvValue>>;
   /** Names that an earlier push set on this deployment. Names that left `env` are removed. */
@@ -485,14 +488,14 @@ export interface PushOptions {
 
 /**
  * The app directory and the program of a push. Fails before any change when
- * `source` is not the functions directory of the app, or when the app has no
- * installed Convex CLI and no push command.
+ * `rootDir` has no package.json, when `source` is not the functions directory
+ * of the app, or when the app has no installed Convex CLI and no push command.
  */
-export const checkSource = (input: Source) =>
+export const checkSource = (rootDir: string, input: Source) =>
   Effect.gen(function* () {
     const source = sourceOf(input);
-    const cwd = yield* appDirectoryOf(source.path);
-    yield* checkFunctionsDirectory(cwd, source.path);
+    const cwd = yield* appDirectoryOf(rootDir);
+    yield* checkFunctionsDirectory(cwd, resolve(cwd, source.path));
     const program = source.command ?? (yield* installedCli(cwd));
     return { cwd, program };
   });
@@ -510,7 +513,10 @@ export const push = (
 ) =>
   Effect.gen(function* () {
     const source = options.source === undefined ? undefined : sourceOf(options.source);
-    const resolved = options.source === undefined ? undefined : yield* checkSource(options.source);
+    const resolved =
+      options.source === undefined
+        ? undefined
+        : yield* checkSource(options.rootDir, options.source);
     const cwd = resolved?.cwd;
     const program = resolved?.program;
     const env = Object.entries(options.env).sort(([a], [b]) => (a < b ? -1 : 1));

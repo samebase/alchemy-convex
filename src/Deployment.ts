@@ -2,8 +2,14 @@
 // variables, and its functions, with the URLs that a frontend or a Worker
 // needs. This is the Convex plane of a stack: no deploy key leaves it.
 //
-// - `source` is the Convex functions directory, such as `./convex`. The
-//   update pushes it with the Convex CLI that the app installed (Push.ts).
+// - `rootDir` is the app directory, relative to the directory where the
+//   deploy runs (the directory of the stack file), such as `apps/web`, and
+//   "." by default. The push runs in it, and `source` is relative to it.
+//   The constructor writes it into the props, "." included, so that a reader
+//   of the state row finds the app directory of every deployment.
+// - `source` is the Convex functions directory relative to `rootDir`, such
+//   as `./convex`. The update pushes it with the Convex CLI that the app
+//   installed (Push.ts).
 //   The content identity of the push is a hash of the source files, the
 //   app's package.json, convex.json, and lockfile, the deployment name, and
 //   `env`. The same hash is a no-op. The hash is taken again after the push,
@@ -45,9 +51,11 @@
 //
 // Patterns from Confect `packages/alchemy/src/Deployment.ts`
 // (https://github.com/rjdellecese/confect, ISC license, see NOTICE).
+import { posix, win32 } from "node:path";
 import { Resource } from "alchemy";
 import { OwnedBySomeoneElse, Unowned } from "alchemy/AdoptPolicy";
 import { isResolved } from "alchemy/Diff";
+import type { InputProps } from "alchemy/Input";
 import * as Provider from "alchemy/Provider";
 import * as Effect from "effect/Effect";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
@@ -79,10 +87,16 @@ interface DeploymentInputs {
   /** The project: a Convex.Project resource, or `{ projectId }`. Cannot change. */
   readonly project: { readonly projectId: number };
   /**
-   * The Convex functions directory, such as `./convex`, or that directory
-   * with a push command and more hashed files. The push runs in the nearest
-   * directory above it with a package.json. Without `source`, the resource
-   * pushes nothing.
+   * The app directory, relative to the directory where the deploy runs (the
+   * directory of the stack file), such as `apps/web`. Default ".". It must
+   * have a package.json. The push runs in it, and `source` is relative to
+   * it. State from 0.7 has no `rootDir`.
+   */
+  readonly rootDir?: string;
+  /**
+   * The Convex functions directory relative to `rootDir`, such as
+   * `./convex`, or that directory with a push command and more hashed
+   * files. Without `source`, the resource pushes nothing.
    */
   readonly source?: Source;
   /** Environment variables to set on the deployment before the push. */
@@ -134,9 +148,60 @@ export type Deployment = Resource<
   never,
   Providers
 >;
-export const Deployment = Resource<Deployment>("Convex.Deployment", {
+/** The resource class. Stacks call {@link Deployment}, which writes `rootDir` into the props. */
+export const DeploymentResource = Resource<Deployment>("Convex.Deployment", {
   defaultRemovalPolicy: "retain",
 });
+
+/** The props of a `Convex.Deployment` call: Alchemy inputs, with `rootDir` a plain string. */
+export type DeploymentInput = DeploymentProps extends infer P
+  ? P extends DeploymentProps
+    ? InputProps<P, "rootDir">
+    : never
+  : never;
+
+/** `rootDir` in POSIX form, without "./" and a trailing slash, such as `apps/web` or ".". */
+const normalizeRootDir = (rootDir: string) => {
+  const normalized = posix.normalize(rootDir.replaceAll("\\", "/"));
+  return normalized.length > 1 && normalized.endsWith("/") ? normalized.slice(0, -1) : normalized;
+};
+
+/**
+ * `Convex.Deployment("id", props)`. The props go to state with `rootDir` in
+ * POSIX form, and with "." when it is not set, so that every row names the
+ * app directory of its deployment.
+ */
+export const Deployment = Object.assign(
+  (id: string, props: DeploymentInput) =>
+    DeploymentResource(id, { ...props, rootDir: normalizeRootDir(props.rootDir ?? ".") }),
+  {
+    Type: DeploymentResource.Type,
+    Provider: DeploymentResource.Provider,
+    ref: (id: string, options?: { stage?: string; stack?: string }) =>
+      DeploymentResource.ref(id, options),
+  },
+);
+
+/** `rootDir` is an absolute path. */
+export class AbsoluteRootDir extends Schema.TaggedError<AbsoluteRootDir>()("AbsoluteRootDir", {
+  rootDir: Schema.String,
+}) {
+  override get message() {
+    return `Convex.Deployment rootDir ${this.rootDir} is an absolute path. State keeps rootDir for every machine that runs the stack, so set it relative to the directory where the deploy runs, such as "apps/web".`;
+  }
+}
+
+/**
+ * The app directory of the props: `rootDir`, or "." in state from 0.7. Fails
+ * with {@link AbsoluteRootDir} for an absolute path. `win32.isAbsolute` also
+ * answers true for a POSIX absolute path.
+ */
+const rootDirOf = (props: DeploymentProps) => {
+  const rootDir = props.rootDir ?? ".";
+  return win32.isAbsolute(rootDir)
+    ? Effect.fail(new AbsoluteRootDir({ rootDir }))
+    : Effect.succeed(rootDir);
+};
 
 /** The props name another deployment than the one in state. */
 export class DeploymentIdentityChange extends Schema.TaggedError<DeploymentIdentityChange>()(
@@ -336,7 +401,7 @@ const isRefused = (error: ConvexApiError) =>
 
 export const DeploymentProvider = () =>
   Provider.effect(
-    Deployment,
+    DeploymentResource,
     Effect.gen(function* () {
       const api = yield* ManagementApi;
       const credentials = yield* Credentials;
@@ -517,10 +582,10 @@ export const DeploymentProvider = () =>
         });
 
       /** The content identity of `source` and `env` on a deployment, or undefined when there is nothing to push. */
-      const wantedHash = (news: DeploymentProps, deployment: string) =>
+      const wantedHash = (news: DeploymentProps, rootDir: string, deployment: string) =>
         news.source === undefined && Object.keys(news.env ?? {}).length === 0
           ? Effect.succeed(undefined)
-          : pushHash({ source: news.source, deployment, env: news.env ?? {} });
+          : pushHash({ rootDir, source: news.source, deployment, env: news.env ?? {} });
 
       return {
         // `name`, `reference`, and the URLs change when an expired preview is
@@ -529,10 +594,20 @@ export const DeploymentProvider = () =>
         stables: ["projectId", "type", "previewName"],
 
         // Compares with the attributes: after a refused change, `olds` are
-        // the refused props.
-        diff: Effect.fn(function* ({ news, output }) {
+        // the refused props. Only `rootDir` compares with `olds`, because it
+        // is in the props only. A refused update leaves the row `updating`,
+        // and the next plan updates it again anyway.
+        diff: Effect.fn(function* ({ news, olds, output }) {
           if (!isResolved(news) || output === undefined) return undefined;
           yield* checkIdentity(output, news);
+          const rootDir = yield* rootDirOf(news);
+          // Also here, so that a wrong rootDir stops the plan before Apply
+          // writes the new props to the row.
+          if (news.source !== undefined) yield* checkSource(rootDir, news.source);
+          // State from 0.7 has no rootDir, and another rootDir is another
+          // app directory. The update writes the props to state; it pushes
+          // only when the hash changed.
+          if (olds.rootDir !== rootDir) return { action: "update" } as const;
           const access = yield* accessFor(addressOf(news), changesEnv(news, output));
           // A preview expires, anyone can delete a deployment, and another
           // production deployment can become the default. Reconcile then
@@ -540,7 +615,7 @@ export const DeploymentProvider = () =>
           // URL of a deployment that is gone.
           const current = yield* live(access, output);
           if (current?.name !== output.name) return { action: "update" } as const;
-          const hash = yield* wantedHash(news, output.name);
+          const hash = yield* wantedHash(news, rootDir, output.name);
           return hash === output.hash
             ? ({ action: "noop" } as const)
             : ({ action: "update" } as const);
@@ -581,8 +656,10 @@ export const DeploymentProvider = () =>
         reconcile: Effect.fn(function* ({ fqn, news, output }) {
           // Also here: with an unresolved prop in plan, diff could not check.
           if (output !== undefined) yield* checkIdentity(output, news);
-          // The functions directory and the program, before any change.
-          if (news.source !== undefined) yield* checkSource(news.source);
+          // The app directory, the functions directory, and the program,
+          // before any change.
+          const rootDir = yield* rootDirOf(news);
+          if (news.source !== undefined) yield* checkSource(rootDir, news.source);
           const address = addressOf(news);
           const access = yield* accessFor(address, changesEnv(news, output));
           const env = news.env ?? {};
@@ -597,7 +674,7 @@ export const DeploymentProvider = () =>
           const refuse = (name: string) =>
             new OwnedBySomeoneElse({
               message: `Project ${address.projectId} already has ${news.type} deployment ${name}${news.type === "prod" ? " with code" : ` named "${news.name}"`}. Re-run with --adopt to take it over${news.type === "prod" ? "" : ", or use another name"}.`,
-              resourceType: Deployment.Type,
+              resourceType: DeploymentResource.Type,
               physicalName: name,
             });
 
@@ -662,7 +739,7 @@ export const DeploymentProvider = () =>
           // Variables set on another deployment stay there: they are not ours
           // on this one.
           const previousEnvNames = output?.name === target.name ? envNamesOf(output) : [];
-          const before = yield* wantedHash(news, target.name);
+          const before = yield* wantedHash(news, rootDir, target.name);
           if (before === undefined && previousEnvNames.length === 0) {
             return { ...target, hash: undefined, envNames: [] };
           }
@@ -672,6 +749,7 @@ export const DeploymentProvider = () =>
           const options = {
             deployment: target.name,
             url: target.url,
+            rootDir,
             source: news.source,
             env,
             previousEnvNames,
@@ -719,7 +797,7 @@ export const DeploymentProvider = () =>
           // such as convex/_generated, are part of the identity.
           return {
             ...target,
-            hash: yield* wantedHash(news, target.name),
+            hash: yield* wantedHash(news, rootDir, target.name),
             envNames: Object.keys(env).sort(),
           };
         }),

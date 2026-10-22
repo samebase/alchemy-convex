@@ -270,6 +270,7 @@ const pushStore = (
       push(options.spawner, key, {
         deployment: deployment.name,
         url: deployment.deploymentUrl,
+        rootDir: join(options.store, ".."),
         source: {
           path: options.store,
           command: [...cli, "deploy", "--typecheck", "disable", "--codegen", "disable"],

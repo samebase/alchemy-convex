@@ -14,7 +14,7 @@
 import { mkdtempSync, rmSync, symlinkSync, writeFileSync, mkdirSync, copyFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { adopt } from "alchemy/AdoptPolicy";
 import * as RemovalPolicy from "alchemy/RemovalPolicy";
@@ -182,7 +182,9 @@ const pushKeyCalls = (lines: readonly string[]) =>
 const sequence = (created: number[], app: string) =>
   Effect.gen(function* () {
     const api = yield* ManagementApi;
-    const source = join(app, "convex");
+    // The app directory as a stack passes it, relative to the working directory.
+    const rootDir = relative(process.cwd(), app);
+    const source = "./convex";
     const prodStack = Core.scratchStack(tokenOptions, `alchemy-convex-plane-prod-${hex}`);
     const adoptStack = Core.scratchStack(tokenOptions, `alchemy-convex-plane-adopt-${hex}`);
     const previewStack = Core.scratchStack(
@@ -198,6 +200,7 @@ const sequence = (created: number[], app: string) =>
         const prod = yield* Convex.Deployment("Prod", {
           project,
           type: "prod",
+          rootDir,
           source,
           env: { PLANE_VAR: value },
         });
@@ -256,6 +259,7 @@ const sequence = (created: number[], app: string) =>
       const prod = yield* Convex.Deployment("Prod", {
         project: { projectId: first.projectId },
         type: "prod",
+        rootDir,
         source,
       });
       return { name: prod.name };
@@ -287,6 +291,7 @@ const sequence = (created: number[], app: string) =>
         project,
         type: "preview",
         name: stage,
+        rootDir,
         source,
         env: { PLANE_VAR: "preview" },
       }).pipe(RemovalPolicy.destroy());
@@ -343,6 +348,7 @@ const sequence = (created: number[], app: string) =>
         project: { projectId: first.projectId },
         type: "preview",
         name: stage,
+        rootDir,
         source,
       }).pipe(RemovalPolicy.destroy());
       return { name: deployment.name, url: deployment.url };
@@ -380,6 +386,7 @@ const sequence = (created: number[], app: string) =>
         const prod = yield* Convex.Deployment("Prod", {
           project: { projectId: first.projectId },
           type: "prod",
+          rootDir,
           source,
           env: { PLANE_VAR: "key" },
           // Another state set PLANE_VAR in step 1: overwriting it needs --adopt.
