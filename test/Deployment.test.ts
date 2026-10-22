@@ -11,6 +11,7 @@ import * as Redacted from "effect/Redacted";
 import { describe, expect, it } from "vitest";
 import { DeploymentProvider } from "../src/Deployment.ts";
 import { ManagementApiLive } from "../src/ManagementApi.ts";
+import { ProjectProvider } from "../src/Project.ts";
 import * as Convex from "../src/index.ts";
 import { FakeConvex } from "./fakeConvex.ts";
 
@@ -510,4 +511,29 @@ describe("Convex.Deployment read", () => {
     );
     expect(read).toBeUndefined();
   });
+});
+
+// Convex.Deployment is a function over the resource class; it still goes
+// where Alchemy takes a resource class.
+const custom = Test.make({
+  providers: Layer.effect(
+    Convex.Providers,
+    Provider.collection([Convex.Project, Convex.Deployment]),
+  ).pipe(
+    Layer.provide(Layer.mergeAll(ProjectProvider(), DeploymentProvider())),
+    Layer.provide(ManagementApiLive()),
+    Layer.provide(Convex.fromValues({ accessToken: Redacted.make("test-token") })),
+    Layer.orDie,
+  ),
+});
+
+describe("Convex.Deployment in a custom provider collection", () => {
+  custom.test.provider("deploys through Provider.collection([..., Convex.Deployment])", (stack) =>
+    Effect.gen(function* () {
+      const fake = new FakeConvex().install();
+      const projectId = fake.addProject({ name: NAME, teamId: TEAM });
+      const out = yield* stack.deploy(deployment({ project: { projectId }, type: "prod" }));
+      expect(out.name).toBe(fake.project(projectId)?.prodDeploymentName);
+    }),
+  );
 });

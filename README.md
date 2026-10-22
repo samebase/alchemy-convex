@@ -192,7 +192,8 @@ call.
     deploy.
   - `rootDir` is the app directory, relative to the directory where the deploy runs, `"."` by
     default. It must be relative (`AbsoluteRootDir`) and have a package.json (`ConvexAppNotFound`).
-    There is no search in the directories above it.
+    There is no search in the directories above it. When convex.json puts the functions outside
+    `rootDir`, the hash covers them too.
   - `source` is the Convex functions directory relative to `rootDir`: `convex/`, or the `functions`
     field of convex.json (`SourceMismatch`). The CLI runs in `rootDir`, with the Node.js that runs
     Alchemy, and is never downloaded (`ConvexCliNotFound`).

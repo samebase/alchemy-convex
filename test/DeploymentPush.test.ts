@@ -21,7 +21,9 @@ import * as RemovalPolicy from "alchemy/RemovalPolicy";
 import * as State from "alchemy/State";
 import type { ScratchStack } from "alchemy/Test/Core";
 import * as Test from "alchemy/Test/Vitest";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
@@ -665,17 +667,45 @@ describe("Convex.Deployment rootDir", () => {
       }),
   );
 
-  withToken.test.provider("refuses an absolute rootDir before any change", (stack) =>
+  withToken.test.provider(
+    "stops the declaration on an absolute rootDir, before the plan",
+    (stack) =>
+      Effect.gen(function* () {
+        const fake = new FakeConvex().install();
+        const exit = yield* Effect.exit(
+          stack.deploy(
+            Effect.gen(function* () {
+              // A project of this stack: its create would be the first change.
+              const project = yield* Convex.Project("Project", { team: TEAM, name: NAME });
+              const deployment = yield* Convex.Deployment("Backend", {
+                project,
+                type: "prod",
+                rootDir: app,
+                source: "./convex",
+              });
+              return { name: deployment.name };
+            }),
+          ),
+        );
+        assert(Exit.isFailure(exit));
+        expect(Cause.squash(exit.cause)).toBeInstanceOf(Convex.AbsoluteRootDir);
+        expect(fake.lines()).toEqual([]);
+        expect(yield* rowOf(stack)).toBeUndefined();
+      }),
+  );
+
+  withToken.test.provider("hashes the functions that convex.json puts outside rootDir", (stack) =>
     Effect.gen(function* () {
       const fake = new FakeConvex().install();
       const projectId = fake.addProject({ name: NAME, teamId: TEAM });
-      const error = yield* Effect.flip(
-        stack.deploy(backend({ project: { projectId }, type: "prod", rootDir: app }, "./convex")),
-      );
-      expect(error).toBeInstanceOf(Convex.AbsoluteRootDir);
-      expect(runs()).toEqual([]);
-      // The plan reads; nothing writes.
-      expect(fake.lines().every((line) => line.startsWith("GET "))).toBe(true);
+      mkdirSync(join(dir, "shared", "convex"), { recursive: true });
+      copyFileSync(HELLO, join(dir, "shared", "convex", "hello.ts"));
+      writeFileSync(join(app, "convex.json"), JSON.stringify({ functions: "../shared/convex" }));
+      const props = backend({ project: { projectId }, type: "prod" }, "../shared/convex");
+      yield* stack.deploy(props);
+      writeFileSync(join(dir, "shared", "convex", "hello.ts"), "export const changed = 1;\n");
+      yield* stack.deploy(props);
+      expect(runs()).toHaveLength(2);
     }),
   );
 

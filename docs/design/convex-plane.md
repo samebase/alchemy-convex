@@ -66,17 +66,24 @@ Workers and Convex deployments, and in a monorepo the stack file moves to the re
   package.json. With it, the app directory came from the file system, not from the props, so a
   reader of the state could not know it. A stack that relied on it sets `rootDir`, such as
   `{ rootDir: "apps/web", source: "./convex" }` for `{ source: "apps/web/convex" }`. Without it,
-  the plan stops with `SourceMismatch` before Alchemy writes anything: the source checks run in
-  `diff` too, not only in `reconcile`.
+  the plan of a deployment in state stops with `SourceMismatch` before Alchemy writes anything:
+  the source checks run in `diff` too. For a new deployment, or when another prop is still an
+  Output in the plan, they run before the push, as in 0.7.
 - `rootDir` must have a package.json (`ConvexAppNotFound`) and must be relative
   (`AbsoluteRootDir`): the state is shared between a laptop and CI, so an absolute path names a
-  directory of one machine. A relative path can start with `..`.
+  directory of one machine. A relative path can start with `..`. The absolute check runs when the
+  stack declares the resource, so such a path never reaches the plan or state. It is a defect,
+  because the program of `Alchemy.Stack` can fail only with a `ConfigError`.
+- The default hash also covers the functions directory when convex.json puts it outside
+  `rootDir`, such as `"functions": "../shared/convex"`. The search of 0.7 did not find such an
+  app.
 - State always holds `rootDir`, in POSIX form, `"."` included. Reason: a 0.7 row has no `rootDir`,
   and its app directory was inferred, so a reader must tell `"."` from "not known". Alchemy has no
   hook that changes props before they go to state (`alchemy@2.0.0-beta.83`: Apply stores the props
   as the program gives them), so `Convex.Deployment` is a function over the resource class that
-  writes the default. It keeps `Type`, `Provider`, and `ref`. It takes `rootDir` as a plain
-  string and the props as an object, not as an Effect.
+  writes the default. It keeps the fields of the resource class (`Type`, `Props`, `Self`,
+  `Provider`, `Aliases`, `ref`), so `Provider.collection` still takes it. It takes `rootDir` as
+  a plain string and the props as an object, not as an Effect.
 - The relative path resolves against the working directory of the deploy, as Alchemy resolves the
   relative paths of a Cloudflare Worker (`vite.rootDir`). Alchemy gives a provider no path of the
   stack file, so run `alchemy deploy` in the directory of the stack file. The run record

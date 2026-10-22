@@ -166,23 +166,7 @@ const normalizeRootDir = (rootDir: string) => {
   return normalized.length > 1 && normalized.endsWith("/") ? normalized.slice(0, -1) : normalized;
 };
 
-/**
- * `Convex.Deployment("id", props)`. The props go to state with `rootDir` in
- * POSIX form, and with "." when it is not set, so that every row names the
- * app directory of its deployment.
- */
-export const Deployment = Object.assign(
-  (id: string, props: DeploymentInput) =>
-    DeploymentResource(id, { ...props, rootDir: normalizeRootDir(props.rootDir ?? ".") }),
-  {
-    Type: DeploymentResource.Type,
-    Provider: DeploymentResource.Provider,
-    ref: (id: string, options?: { stage?: string; stack?: string }) =>
-      DeploymentResource.ref(id, options),
-  },
-);
-
-/** `rootDir` is an absolute path. */
+/** `rootDir` is an absolute path. The declaration stops with it as a defect, before the plan. */
 export class AbsoluteRootDir extends Schema.TaggedError<AbsoluteRootDir>()("AbsoluteRootDir", {
   rootDir: Schema.String,
 }) {
@@ -192,16 +176,32 @@ export class AbsoluteRootDir extends Schema.TaggedError<AbsoluteRootDir>()("Abso
 }
 
 /**
- * The app directory of the props: `rootDir`, or "." in state from 0.7. Fails
- * with {@link AbsoluteRootDir} for an absolute path. `win32.isAbsolute` also
- * answers true for a POSIX absolute path.
+ * `Convex.Deployment("id", props)`. The props go to state with `rootDir` in
+ * POSIX form, and with "." when it is not set, so that every row names the
+ * app directory of its deployment. An absolute `rootDir` stops the
+ * declaration, so it never reaches the plan or state. The check dies,
+ * because the program of `Alchemy.Stack` can fail only with a ConfigError.
+ * `win32.isAbsolute` also answers true for a POSIX absolute path. The other
+ * fields keep it usable where Alchemy takes a resource class, such as
+ * `Provider.collection`.
  */
-const rootDirOf = (props: DeploymentProps) => {
-  const rootDir = props.rootDir ?? ".";
-  return win32.isAbsolute(rootDir)
-    ? Effect.fail(new AbsoluteRootDir({ rootDir }))
-    : Effect.succeed(rootDir);
-};
+export const Deployment = Object.assign(
+  (id: string, props: DeploymentInput) => {
+    const rootDir = props.rootDir ?? ".";
+    return win32.isAbsolute(rootDir)
+      ? Effect.die(new AbsoluteRootDir({ rootDir }))
+      : DeploymentResource(id, { ...props, rootDir: normalizeRootDir(rootDir) });
+  },
+  {
+    Type: DeploymentResource.Type,
+    Props: DeploymentResource.Props,
+    Self: DeploymentResource.Self,
+    Provider: DeploymentResource.Provider,
+    Aliases: DeploymentResource.Aliases,
+    ref: (id: string, options?: { stage?: string; stack?: string }) =>
+      DeploymentResource.ref(id, options),
+  },
+);
 
 /** The props name another deployment than the one in state. */
 export class DeploymentIdentityChange extends Schema.TaggedError<DeploymentIdentityChange>()(
@@ -600,7 +600,8 @@ export const DeploymentProvider = () =>
         diff: Effect.fn(function* ({ news, olds, output }) {
           if (!isResolved(news) || output === undefined) return undefined;
           yield* checkIdentity(output, news);
-          const rootDir = yield* rootDirOf(news);
+          // State from 0.7 has no rootDir; the constructor always writes it.
+          const rootDir = news.rootDir ?? ".";
           // Also here, so that a wrong rootDir stops the plan before Apply
           // writes the new props to the row.
           if (news.source !== undefined) yield* checkSource(rootDir, news.source);
@@ -658,7 +659,7 @@ export const DeploymentProvider = () =>
           if (output !== undefined) yield* checkIdentity(output, news);
           // The app directory, the functions directory, and the program,
           // before any change.
-          const rootDir = yield* rootDirOf(news);
+          const rootDir = news.rootDir ?? ".";
           if (news.source !== undefined) yield* checkSource(rootDir, news.source);
           const address = addressOf(news);
           const access = yield* accessFor(address, changesEnv(news, output));

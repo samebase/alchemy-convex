@@ -311,27 +311,31 @@ export const pushHash = (options: {
       source === undefined
         ? undefined
         : yield* appDirectoryOf(options.rootDir).pipe(
-            Effect.flatMap((cwd) =>
-              hashDirectory({
+            Effect.flatMap((cwd) => {
+              const functions = relative(cwd, resolve(cwd, source.path)).split("\\").join("/");
+              return hashDirectory({
                 cwd,
                 // By default every file of the app that git does not ignore,
-                // such as a module outside `source` that a function imports.
-                // `include` narrows it to the functions, the manifests, and
-                // the listed globs.
+                // such as a module outside `source` that a function imports,
+                // and the functions when convex.json puts them outside
+                // rootDir. `include` narrows it to the functions, the
+                // manifests, and the listed globs.
                 memo:
-                  source.include === undefined
-                    ? {}
-                    : {
+                  source.include !== undefined
+                    ? {
                         include: [
-                          `${relative(cwd, resolve(cwd, source.path)).split("\\").join("/")}/**`,
+                          `${functions}/**`,
                           "package.json",
                           "convex.json",
                           ...source.include,
                         ],
                         lockfile: true,
-                      },
-              }),
-            ),
+                      }
+                    : functions === ".." || functions.startsWith("../")
+                      ? { include: ["**/*", `${functions}/**`], lockfile: true }
+                      : {},
+              });
+            }),
           );
     const env = Object.entries(options.env)
       .map(([name, value]): readonly [string, string] => [name, valueOf(value)])
