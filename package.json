@@ -60,7 +60,7 @@
     "convex-test": "0.0.60",
     "effect": "4.0.4",
     "publint": "0.3.25",
-    "typescript": "6.0.3",
+    "typescript": "7.0.2",
     "vite-plus": "1.1.0",
     "vitest": "5.0.3"
   },
