@@ -53,6 +53,52 @@ Problem: 0.3 is shaped for Workers Builds: keys go to a build outside Alchemy, `
 - Removed: `Code`, `Deploy`, `DeployKey`, `PreviewDeployKey`, `EnvironmentVariable`,
   `DefaultEnvironmentVariable`.
 
+## Decision: `rootDir` (0.8.0)
+
+Decision (Nicu, 2026-10-22): every deployable resource in a stack has `rootDir`, the app directory
+relative to the directory of the stack file, `"."` by default. Everything about the resource is
+relative to it. `Convex.Deployment` gets it: the push runs in `rootDir`, `source.path` and
+`source.include` are relative to it, and the content hash covers the files under it. Reason: the
+Samebase dashboard places each resource under its app folder from the state rows, with one rule for
+Workers and Convex deployments, and in a monorepo the stack file moves to the repository root.
+
+- Removed: the rule of 0.3 to 0.7 that the push runs in the nearest directory above `source` with a
+  package.json. With it, the app directory came from the file system, not from the props, so a
+  reader of the state could not know it. A stack that relied on it sets `rootDir`, such as
+  `{ rootDir: "apps/web", source: "./convex" }` for `{ source: "apps/web/convex" }`. Without it,
+  the plan of a deployment in state stops with `SourceMismatch` before Alchemy writes anything:
+  the source checks run in `diff` too. For a new deployment, or when another prop is still an
+  Output in the plan, they run before the push, as in 0.7.
+- `rootDir` must have a package.json (`ConvexAppNotFound`) and must be relative
+  (`AbsoluteRootDir`): the state is shared between a laptop and CI, so an absolute path names a
+  directory of one machine. A relative path can start with `..`. The absolute check runs when the
+  stack declares the resource, so such a path never reaches the plan or state. It is a defect,
+  because the program of `Alchemy.Stack` can fail only with a `ConfigError`.
+- The default hash also covers the functions directory when convex.json puts it outside
+  `rootDir`, such as `"functions": "../shared/convex"`. The search of 0.7 did not find such an
+  app.
+- State always holds `rootDir`, in POSIX form, `"."` included. Reason: a 0.7 row has no `rootDir`,
+  and its app directory was inferred, so a reader must tell `"."` from "not known". Alchemy has no
+  hook that changes props before they go to state (`alchemy@2.0.0-beta.83`: Apply stores the props
+  as the program gives them), so `Convex.Deployment` is a function over the resource class that
+  writes the default. It keeps the fields of the resource class (`Type`, `Props`, `Self`,
+  `Provider`, `Aliases`, `ref`), so `Provider.collection` still takes it. It takes `rootDir` as
+  a plain string and the props as an object, not as an Effect.
+- The relative path resolves against the working directory of the deploy, as Alchemy resolves the
+  relative paths of a Cloudflare Worker (`vite.rootDir`). Alchemy gives a provider no path of the
+  stack file, so run `alchemy deploy` in the directory of the stack file. The run record
+  (`samebase.run.stackFile`) names that directory for a reader.
+- Upgrade from 0.7: `diff` compares `rootDir` with the stored props, so the first run plans one
+  `update` for each deployment, and that update writes `rootDir` to the row. When the app directory
+  is the same as before, the hash is the same, and the update changes nothing in Convex: no push, no
+  deploy key, only reads. The next run is a no-op. Measured on team nicu with a stack file at the
+  root of a scratch repository and the app in `apps/web`: 0.7.0 deployed with
+  `source: "apps/web/convex"`, then 0.8.0 with `rootDir: "apps/web", source: "./convex"` planned
+  "1 to update", took 190 ms, kept the hash, and did not change the push time of the deployment;
+  the run after it planned "no changes". The lockfile is part of the hash, so the install of 0.8.0
+  itself changes the hash in a repository: there, the first run pushes the same functions once, as
+  it does after every dependency change.
+
 ## Caller concerns, not provider concerns
 
 A collision-safe stage key (two branches that differ only by `/`), the preview name as the raw

@@ -8,10 +8,12 @@ export {
   fromValues,
 } from "./Credentials.ts";
 export {
+  AbsoluteRootDir,
   AmbiguousDeployment,
   Deployment,
   type DeploymentAttributes,
   DeploymentIdentityChange,
+  type DeploymentInput,
   type DeploymentProps,
   ProductionDeploymentNotFound,
 } from "./Deployment.ts";

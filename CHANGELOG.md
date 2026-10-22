@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.8.0 (unreleased)
+
+`Convex.Deployment` takes `rootDir`: the app directory, relative to the directory where the deploy
+runs (the directory of the stack file), `"."` by default. The push runs in it, and `source` and
+`source.include` are relative to it. State always holds it, `"."` included, so a reader of the
+state places each deployment under its app folder, with the same rule as a Cloudflare Worker.
+
+- Breaking: the push no longer runs in the nearest directory above `source` with a package.json. A
+  stack file outside the app directory needs `rootDir`, such as
+  `{ rootDir: "apps/web", source: "./convex" }` in place of `{ source: "apps/web/convex" }`.
+  Without it, the run stops with `SourceMismatch` before the push. A stack file in the app
+  directory needs no change.
+- `rootDir` must have a package.json (`ConvexAppNotFound`, which has the field `rootDir` in place
+  of `source`). `SourceMismatch` names the app directory too. For a deployment in state, the
+  source checks also run in the plan, so a wrong `rootDir` stops the run before Alchemy writes the
+  new props to state.
+- An absolute `rootDir` stops the stack when it declares the resource, with the defect
+  `AbsoluteRootDir`, so it never reaches the plan or state.
+- The default content hash also covers the functions directory when convex.json puts it outside
+  `rootDir`, such as `"functions": "../shared/convex"`.
+- The first run after the upgrade plans one `update` for each `Convex.Deployment`, which writes
+  `rootDir` to its state row. When the app directory did not move, the update changes nothing in
+  Convex: no push, no deploy key, only reads. The lockfile is part of the content hash, so when the
+  upgrade changed the lockfile, that run also pushes the same functions once.
+- `Convex.Deployment` is a function over the resource class that writes `rootDir` into the props.
+  It keeps the fields of the resource class (`Type`, `Props`, `Self`, `Provider`, `Aliases`,
+  `ref`), so `Provider.collection` still takes it. It takes `rootDir` as a plain string and the
+  props as an object, not as an Effect. `Convex.DeploymentInput` is the type of its props.
+- `Convex.state()` passes the directory of its store as `rootDir` to the push. The store, its
+  version, and its function names do not change.
+
 ## 0.7.0 (unreleased)
 
 The stage output records its run. `Convex.state()` stores the stack's output plus the key
