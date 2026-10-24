@@ -9,5 +9,5 @@ minimumReleaseAgeExclude:
 # One Vite and one Vitest for `vp test` and for the packages that import them directly
 # (@effect/vitest, alchemy/Test/Vitest). Keep these at the versions that vite-plus bundles.
 overrides:
-  vite@*: npm:@voidzero-dev/vite-plus-core@1.1.0
-  vitest@*: 5.0.3
+  vite@*: npm:@voidzero-dev/vite-plus-core@1.3.0
+  vitest@*: 5.0.5
