@@ -120,11 +120,12 @@ describe("repository reader", () => {
       deployedHeadCommit: null,
       output: "null",
     });
-    const old = { ...run, headCommit: "old-commit" };
+    const previous = { ...run, headCommit: "previous-commit" };
     await t.mutation(internal.state.setOutput, {
       stack: run.repository,
       stage: "main",
-      value: JSON.stringify({ "samebase.run": old, url: "https://example.test" }),
+      value: JSON.stringify({ "samebase.run": previous, url: "https://example.test" }),
+      run: previous,
     });
     await t.mutation(internal.state.set, {
       stack: run.repository,
@@ -135,7 +136,7 @@ describe("repository reader", () => {
     });
     expect((await reader.query(api.reader.repository, {})).stacks[0]?.stages[0]).toMatchObject({
       record: run,
-      deployedHeadCommit: "old-commit",
+      deployedHeadCommit: "previous-commit",
     });
     await t.mutation(internal.state.setOutput, {
       stack: run.repository,
@@ -158,53 +159,12 @@ describe("repository reader", () => {
     await t.mutation(internal.state.removeStack, { stack: run.repository, stage: "main" });
     expect(await reader.query(api.reader.repository, {})).toEqual({ store: "found", stacks: [] });
     expect(await t.query(internal.state.stacks, {})).toEqual([]);
-  });
-
-  it("falls back to old writer output and never retains stale current metadata", async () => {
-    const t = convexTest(schema, modules);
-    const reader = t.withIdentity(identity);
-    const old = { ...run, headCommit: "old-commit" };
-    await t.mutation(internal.state.setOutput, {
-      stack: run.repository,
-      stage: "main",
-      value: JSON.stringify({ "samebase.run": old }),
-    });
     await t.mutation(internal.state.set, {
       stack: run.repository,
       stage: "main",
-      fqn: "A",
+      fqn: "Worker",
       value: "{}",
-      run,
-    });
-    await t.mutation(internal.state.set, {
-      stack: run.repository,
-      stage: "main",
-      fqn: "B",
-      value: "{}",
-    });
-    expect((await reader.query(api.reader.repository, {})).stacks[0]?.stages[0]?.record).toEqual(
-      old,
-    );
-    await t.mutation(internal.state.set, {
-      stack: run.repository,
-      stage: "main",
-      fqn: "A",
-      value: "{}",
-      run,
-    });
-    const newer = { ...run, headCommit: "later-old-writer" };
-    await t.mutation(internal.state.setOutput, {
-      stack: run.repository,
-      stage: "main",
-      value: JSON.stringify({ "samebase.run": newer }),
-    });
-    expect((await reader.query(api.reader.repository, {})).stacks[0]?.stages[0]?.record).toEqual(
-      newer,
-    );
-    await t.mutation(internal.state.setOutput, {
-      stack: run.repository,
-      stage: "main",
-      value: JSON.stringify({ "samebase.run": { ...run, repository: "other/app" } }),
+      run: { ...run, repository: "other/app" },
     });
     expect(await reader.query(api.reader.repository, {})).toEqual({ store: "found", stacks: [] });
   });
@@ -225,5 +185,15 @@ describe("repository reader", () => {
       );
       expect(stage?.deployedHeadCommit).toBeNull();
     }
+    // A stack can put its own value under the key: it is not a run record.
+    await t.mutation(internal.state.setOutput, {
+      stack: run.repository,
+      stage: "main",
+      value: JSON.stringify({ "samebase.run": { ...run, headCommit: 1 } }),
+      run,
+    });
+    expect(
+      (await t.withIdentity(identity).query(api.reader.repository, {})).stacks[0]?.stages[0],
+    ).toMatchObject({ output: "{}", deployedHeadCommit: null });
   });
 });

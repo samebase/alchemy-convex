@@ -48,18 +48,11 @@ const writeCurrentRun = async (
   ctx: MutationCtx,
   args: { stack: string; stage: string; run?: RunRecord | undefined },
 ) => {
+  if (args.run === undefined) return;
   const output = await outputOf(ctx, args);
-  if (output === null) {
-    if (args.run !== undefined) {
-      await ctx.db.insert("outputs", {
-        stack: args.stack,
-        stage: args.stage,
-        currentRun: args.run,
-      });
-    }
-  } else if (args.run !== undefined || output.currentRun !== undefined) {
-    await ctx.db.patch("outputs", output._id, { currentRun: args.run });
-  }
+  if (output === null)
+    await ctx.db.insert("outputs", { stack: args.stack, stage: args.stage, currentRun: args.run });
+  else await ctx.db.patch("outputs", output._id, { currentRun: args.run });
 };
 
 /** The sorted union of two lists of names. */
@@ -239,13 +232,9 @@ export const setOutput = internalMutation({
   handler: async (ctx, args) => {
     const row = await outputOf(ctx, args);
     if (row === null)
-      await ctx.db.insert("outputs", {
-        stack: args.stack,
-        stage: args.stage,
-        value: args.value,
-        ...(args.run === undefined ? {} : { currentRun: args.run }),
-      });
-    else await ctx.db.patch("outputs", row._id, { value: args.value, currentRun: args.run });
+      await ctx.db.insert("outputs", { stack: args.stack, stage: args.stage, value: args.value });
+    else await ctx.db.patch("outputs", row._id, { value: args.value });
+    await writeCurrentRun(ctx, args);
     return null;
   },
 });

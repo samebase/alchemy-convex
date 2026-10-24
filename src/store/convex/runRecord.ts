@@ -1,5 +1,4 @@
-import { v } from "convex/values";
-import type { RunRecord } from "../../RunRecord.ts";
+import { v, type GenericValidator, type Infer } from "convex/values";
 
 export const runRecord = v.object({
   version: v.literal(1),
@@ -13,40 +12,30 @@ export const runRecord = v.object({
   recordedAt: v.string(),
 });
 
-/** Old writers put the record in arbitrary output JSON. Keep only its known fields. */
-export function readRunRecord(value: unknown): RunRecord | null {
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    !("version" in value) ||
-    value.version !== 1 ||
-    !("repository" in value) ||
-    typeof value.repository !== "string" ||
-    !("stackFile" in value) ||
-    typeof value.stackFile !== "string" ||
-    !("branch" in value) ||
-    typeof value.branch !== "string" ||
-    !("pullRequest" in value) ||
-    (typeof value.pullRequest !== "number" && value.pullRequest !== null) ||
-    !("headCommit" in value) ||
-    typeof value.headCommit !== "string" ||
-    !("runUrl" in value) ||
-    (typeof value.runUrl !== "string" && value.runUrl !== null) ||
-    !("source" in value) ||
-    (value.source !== "github-actions" && value.source !== "laptop") ||
-    !("recordedAt" in value) ||
-    typeof value.recordedAt !== "string"
-  )
-    return null;
-  return {
-    version: value.version,
-    repository: value.repository,
-    stackFile: value.stackFile,
-    branch: value.branch,
-    pullRequest: value.pullRequest,
-    headCommit: value.headCommit,
-    runUrl: value.runUrl,
-    source: value.source,
-    recordedAt: value.recordedAt,
-  };
-}
+/** Whether `value` passes `validator`. Only the kinds of {@link runRecord} pass; another kind fails. */
+export const validate = <V extends GenericValidator>(
+  validator: V,
+  value: unknown,
+): value is Infer<V> => {
+  switch (validator.kind) {
+    case "object": {
+      if (typeof value !== "object" || value === null) return false;
+      const fields = new Map(Object.entries(value));
+      return Object.entries(validator.fields).every(([key, field]) =>
+        validate(field, fields.get(key)),
+      );
+    }
+    case "union":
+      return validator.members.some((member) => validate(member, value));
+    case "literal":
+      return value === validator.value;
+    case "string":
+      return typeof value === "string";
+    case "float64":
+      return typeof value === "number";
+    case "null":
+      return value === null;
+    default:
+      return false;
+  }
+};

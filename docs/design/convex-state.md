@@ -145,8 +145,8 @@ audience. This requires Convex 1.48.0 or newer. Deployment credentials stay on t
 The browser connects a separate `ConvexClient` to the store, uses `setAuth` to get and renew the
 token, then subscribes to `reader:repository({})`. The query takes no repository argument. It
 reads the exact stack name and names that start with `repository + "/"`, with indexed ranges.
-It checks the scope and repository claim, and returns only stages whose run record matches that
-repository. Each query reads one consistent database snapshot. Its wire reply is:
+It checks the scope and repository claim, and returns only stages whose current run record
+matches that repository. Each query reads one consistent database snapshot. Its wire reply is:
 
 ```ts
 {
@@ -164,24 +164,22 @@ repository. Each query reads one consistent database snapshot. Its wire reply is
 
 Stacks, stages, and resources have deterministic name order. Resource values and output stay JSON
 strings. Before returning them, the query replaces any object that has `__redacted__` with
-`{ __redacted__: null }`, including nested values. It removes `samebase.run` from output and
-returns the validated record separately. The raw internal state functions still return the stored
-values. The reader does not hide Convex query size limits or return a partial repository. A
-repository above the backend's read or result limit fails the query.
+`{ __redacted__: null }`, including nested values. It removes `samebase.run` from output. The
+raw internal state functions still return the stored values. The reader does not hide Convex query
+size limits or return a partial repository. A repository above the backend's read or result limit
+fails the query.
 
-New writers include the current run on `state:set`, `state:remove`, and `state:setOutput`. The
-mutation stores it in `outputs.currentRun` in the same transaction as the resource change.
-`outputs.value` is optional so the first resource can appear before final output. `getOutput`
-and `readStack.output` remain `null` until there is real output. `readStack.record` is the current
-record or `null`; an older reader can still derive the last completed record from output.
-`removeStack` removes both the resources and the output row, including the current record.
+The writer sends the record of its run with `state:set`, `state:remove`, and `state:setOutput`.
+The mutation stores it in `outputs.currentRun` in the same transaction as the resource change.
+`outputs.value` is optional so the first resource can appear before the output. `getOutput` and
+`readStack.output` stay `null` until the stack writes an output. `readStack.record` is the current
+record or `null`. A run without a record does not change `currentRun`. `removeStack` removes both
+the resources and the output row, including the current record.
 
-The public reader prefers `currentRun`, then falls back to the old output's `samebase.run`.
-`deployedHeadCommit` comes only from a valid repository-matching output record. A new run can
-therefore appear while the deployed commit remains the last successful commit. With no successful
-output it is `null`. Old writers clear `currentRun` when they write. They show only the last
-successful output record and cannot show the first run before output. Arbitrary JSON outputs stay
-valid; outputs without a run record cannot identify a deployed commit.
+`record` is `currentRun`. `deployedHeadCommit` is the `headCommit` of the output's
+`samebase.run` when that value passes the `runRecord` validator and names the same repository,
+else `null`. A new run can therefore appear while the deployed commit stays the last successful
+commit. Arbitrary JSON outputs stay valid; an output without a run record has no deployed commit.
 
 There is no immediate token revocation table. A refused renewal ends the normal client's access;
 an issued token remains valid until the backend rejects its expiry, including its clock tolerance

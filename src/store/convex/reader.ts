@@ -1,6 +1,6 @@
 import { v, type Infer } from "convex/values";
 import { env, internalMutation, query } from "./_generated/server.js";
-import { readRunRecord, runRecord } from "./runRecord.ts";
+import { runRecord, validate } from "./runRecord.ts";
 
 const repositoryName = /^[^/]+\/[^/]+$/;
 
@@ -83,19 +83,13 @@ export const repository = query({
     ]);
     const stacks = new Map<string, Map<string, Infer<typeof stage>>>();
     for (const row of [...rootOutputs, ...childOutputs]) {
-      const parsed = row.value === undefined ? null : withoutSecrets(row.value);
-      const document =
-        typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : null;
-      const outputRecord =
-        document !== null && "samebase.run" in document
-          ? readRunRecord(document["samebase.run"])
-          : null;
-      const record = row.currentRun ?? outputRecord;
-      if (record === null || record.repository !== name) continue;
-      let output = parsed;
-      if (document !== null && "samebase.run" in document) {
-        const { "samebase.run": _record, ...rest } = document;
-        output = rest;
+      const record = row.currentRun;
+      if (record === undefined || record.repository !== name) continue;
+      // The output keeps the record of the last completed deploy under `samebase.run`.
+      let output = row.value === undefined ? null : withoutSecrets(row.value);
+      let deployed: unknown = null;
+      if (typeof output === "object" && output !== null && "samebase.run" in output) {
+        ({ "samebase.run": deployed, ...output } = output);
       }
       let stages = stacks.get(row.stack);
       if (stages === undefined) {
@@ -105,7 +99,10 @@ export const repository = query({
       stages.set(row.stage, {
         name: row.stage,
         record,
-        deployedHeadCommit: outputRecord?.repository === name ? outputRecord.headCommit : null,
+        deployedHeadCommit:
+          validate(runRecord, deployed) && deployed.repository === name
+            ? deployed.headCommit
+            : null,
         resources: [],
         output: JSON.stringify(output),
       });
