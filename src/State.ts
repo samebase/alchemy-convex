@@ -14,20 +14,19 @@
 // end; the `state:version` query says whether the deployment has the store
 // of this version. Without one, or with an older one, the installed Convex
 // CLI pushes src/store/convex to it, with a push key that is deleted after
-// the push. The functions are internal, so only POST /api/function with such
-// a key reaches them: a public function of a root app answers anyone who
-// knows the deployment URL (measured). A key that stops working during a
+// the push. The raw state functions are internal; authenticated readers get
+// repository-scoped subscriptions with secret values removed. A key that stops working during a
 // long run (it expires after two hours) is replaced once per call.
 //
 // Two first runs of a team can both create a project named `alchemy-state`.
 // The run whose project is not the oldest deletes its own, before it writes
 // anything, and uses the oldest: both runs end on one store.
 //
-// The function names are a wire contract: Samebase reads `stacks`,
-// `getOutput`, and `readStack` by name, and an older client calls an older
-// set of names. A name is never renamed or removed. STORE_VERSION rises when
-// a function is added or changes in a way that an older client cannot use,
-// and a client never pushes an older store over a newer one.
+// Samebase reads `stacks`, `getOutput`, `readStack`, and `reader:repository`
+// by name. The store and its readers are released and upgraded together:
+// STORE_VERSION rises with each change of a function, and a client works only
+// with a store of its own version. An older store is pushed over; a newer one
+// fails the run.
 //
 // The stage output that `setOutput` stores is the stack's output plus the
 // run record of src/RunRecord.ts under the key `samebase.run`: the
@@ -157,7 +156,7 @@ export interface FunctionApi {
   /** POST /api/function, the call that `convex run` makes: the reply, which can be a function error. */
   readonly call: (
     path: string,
-    args: Record<string, string | undefined>,
+    args: Record<string, string | RunRecord | undefined>,
   ) => Effect.Effect<Reply, StateStoreError>;
 }
 
@@ -177,9 +176,20 @@ const valueOf = (reply: Reply) =>
     : Effect.fail(failure(reply.errorMessage.trim()));
 
 /** The functions of the store with Alchemy's encoding: the JSON text of encodeState. */
-const remoteOf = (api: FunctionApi) => {
-  const run = (name: string, args: Record<string, string | undefined>) =>
+const remoteOf = (api: FunctionApi, record: RunRecord | undefined) => {
+  const run = (name: string, args: Record<string, string | RunRecord | undefined>) =>
     api.call(`state:${name}`, args).pipe(Effect.flatMap(valueOf));
+  const write = (name: string, args: Record<string, string>) =>
+    Effect.gen(function* () {
+      const currentRun =
+        record === undefined
+          ? undefined
+          : {
+              ...record,
+              recordedAt: new Date(yield* Clock.currentTimeMillis).toISOString(),
+            };
+      return yield* run(name, { ...args, run: currentRun });
+    });
   const strings = (name: string, args: Record<string, string>) =>
     run(name, args).pipe(Effect.flatMap(decode(Schema.Array(Schema.String), name)));
   const optional = (name: string, args: Record<string, string>) =>
@@ -208,13 +218,13 @@ const remoteOf = (api: FunctionApi) => {
         Effect.map((text): unknown => (text === null ? undefined : JSON.parse(text, reviveState))),
       ),
     set: (r: { stack: string; stage: string; fqn: string; value: PersistedState }) =>
-      run("set", { stack: r.stack, stage: r.stage, fqn: r.fqn, value: encode(r.value) }),
+      write("set", { stack: r.stack, stage: r.stage, fqn: r.fqn, value: encode(r.value) }),
     delete: (r: { stack: string; stage: string; fqn: string }) =>
-      run("remove", { stack: r.stack, stage: r.stage, fqn: r.fqn }),
+      write("remove", { stack: r.stack, stage: r.stage, fqn: r.fqn }),
     deleteStack: (r: { stack: string; stage?: string }) =>
       run("removeStack", { stack: r.stack, stage: r.stage }),
     setOutput: (r: { stack: string; stage: string; value: unknown }) =>
-      run("setOutput", { stack: r.stack, stage: r.stage, value: encode(r.value) }),
+      write("setOutput", { stack: r.stack, stage: r.stage, value: encode(r.value) }),
   };
 };
 
@@ -248,7 +258,7 @@ export interface StoreOptions {
   readonly scope: Scope.Scope;
   /** The functions directory that an outdated store gets: {@link storeDirectory}. */
   readonly store: string;
-  /** The record of this run, which `setOutput` adds to the stage output with the time of the write, or undefined for a run without one. */
+  /** The run recorded with resource writes and output, or undefined for a run without one. */
   readonly run: RunRecord | undefined;
 }
 
@@ -367,7 +377,7 @@ export const makeConvexState = (options: StoreOptions) =>
         ),
     };
 
-    const version = yield* storeVersion(functions);
+    let version = yield* storeVersion(functions);
     if (version === undefined || version < STORE_VERSION) {
       // Code without `state:version` is another app with the name of the store.
       if (version === undefined && deployment.lastDeployTime) {
@@ -377,24 +387,19 @@ export const makeConvexState = (options: StoreOptions) =>
       }
       // Another run can push a newer store in the meantime: read again right
       // before the push. The push itself has no lock (see the design note).
-      const now = yield* storeVersion(functions);
-      if (now === undefined || now < STORE_VERSION) {
+      version = yield* storeVersion(functions);
+      if (version === undefined || version < STORE_VERSION) {
         yield* pushStore(options, deployment);
-        const pushed = yield* storeVersion(functions);
-        if (pushed === undefined || pushed < STORE_VERSION) {
-          return yield* failure(
-            `${deployment.name} answers store version ${pushed ?? "none"} after the push of version ${STORE_VERSION}.`,
-          );
-        }
+        version = yield* storeVersion(functions);
       }
-    } else if (version > STORE_VERSION) {
-      // The names are a wire contract, so a newer store serves this client.
-      yield* Effect.logInfo(
-        `Convex state: the store of team ${team} is version ${version}, newer than version ${STORE_VERSION} of this package, and it stays.`,
+    }
+    if (version !== STORE_VERSION) {
+      return yield* failure(
+        `${deployment.name} answers store version ${version ?? "none"}, and this package needs store version ${STORE_VERSION}.`,
       );
     }
 
-    const remote = remoteOf(functions);
+    const remote = remoteOf(functions, options.run);
     /** The stack's output plus the record, when the run has one and the output has a place for it. */
     const documentOf = (request: { stack: string; stage: string; value: unknown }) =>
       Effect.gen(function* () {

@@ -8,6 +8,8 @@
  * @module
  */
 
+import type * as reader from "../reader.js";
+import type * as runRecord from "../runRecord.js";
 import type * as state from "../state.js";
 import type * as version from "../version.js";
 
@@ -18,6 +20,8 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  reader: typeof reader;
+  runRecord: typeof runRecord;
   state: typeof state;
   version: typeof version;
 }>;

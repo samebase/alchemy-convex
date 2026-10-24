@@ -34,7 +34,7 @@ reads.
   is the GitHub repository, `owner/name`, so `stacks` is the index that Samebase reads.
 - The store exists before the stack runs, so there is no local or in-memory state during a
   bootstrap: the project and the push happen before the engine reads anything.
-- Every function of the store is internal. Measured: a public function of a root app answers
+- The raw state functions are internal. Measured: a public function of a root app answers
   `POST /api/mutation` and `/api/query` with no key at all
   (`test/fixtures/state/public_mutation_no_key.json`). An internal function answers only
   `POST /api/function` with a deploy key of the deployment, the call that `convex run` makes; without
@@ -52,10 +52,10 @@ reads.
   push `src/store/convex` with the Convex CLI of the app, `convex deploy --typecheck disable
   --codegen disable`, from `src/store` of the installed package, with a push key of
   `PUSH_KEY_ACTIONS` that is deleted after the push. The version is read again right before the
-  push, because another run can push a newer store in the meantime. A newer number is used as it
-  is: the names are a wire contract, so a newer store serves an older client, and the store is never
-  pushed back. Unlike the Cloudflare store, which compares for equality and would deploy an older
-  Worker over a newer one. A deployment with code but no `state:version` is another app with the
+  push, because another run can push a newer store in the meantime. A newer number fails the run
+  with both versions: the store and its clients are released and upgraded together, and the store
+  is never pushed back. Unlike the Cloudflare store, which compares for equality and would deploy an
+  older Worker over a newer one. A deployment with code but no `state:version` is another app with the
   name of the store, and the run fails instead of pushing over it.
 - The functions directory is found from the module: `src/State.ts` in a checkout, `lib/index.js` in
   the installed package, and `../src/store/convex` from either, because the package ships `src`.
@@ -63,10 +63,10 @@ reads.
   directory above the functions, so `src/store/package.json` declares the peer dependency. The CLI
   comes from `createRequire(src/store/package.json).resolve("convex/package.json")`: the `convex`
   of the app, through the virtual store of pnpm or the flat `node_modules` of npm.
-- Function names are a wire contract: Samebase calls `state:stacks`, `state:stages`,
-  `state:list`, `state:get`, and `state:getOutput` by name, and an older package calls an older
-  set. Add functions, never rename or remove one. `stacks` and `stages` list a stage that has only
-  an output row too, so a reader sees a stack with no resources.
+- Samebase calls `state:stacks`, `state:stages`, `state:list`, `state:get`, and
+  `state:getOutput` by name. The store and Samebase are released and upgraded together: a renamed
+  function is a version bump on both sides. `stacks` and `stages` list a stage that has only an
+  output row too, so a reader sees a stack with no resources.
 - Not kept from 0.5.0: the `alchemyState` component, its `convex.config` export, and
   `CONVEX_STATE_DEPLOY_KEY`. The 0.5.0 rows are not migrated: a stack moves with one
   `alchemy deploy --adopt`, which takes its project and deployments over by name.
@@ -132,6 +132,62 @@ successful apply. The record therefore describes the last full successful deploy
 is what the resources of the stage reflect; the failed run is GitHub's fact. A dirty laptop tree is
 recorded by its last commit.
 
+## Repository subscriptions (0.9.0)
+
+Store version 3 adds `reader:authorize`, an internal mutation. A trusted server must check the
+user's current repository and team access before each call. It sends `{ repository, subject }`
+with a deployment credential that can run internal mutations. The reply is `{ token }`. The
+token is signed with the deployment's native ES256 key, has a 300-second lifetime, and contains
+`scope: "alchemy:read"` and the exact repository. Its audience is the deployment's cloud URL plus
+`/alchemy-reader`. `auth.config.ts` accepts only that deployment's issuer, native JWKS, and
+audience. This requires Convex 1.48.0 or newer. Deployment credentials stay on the trusted server.
+
+The browser connects a separate `ConvexClient` to the store, uses `setAuth` to get and renew the
+token, then subscribes to `reader:repository({})`. The query takes no repository argument. It
+reads the exact stack name and names that start with `repository + "/"`, with indexed ranges.
+It checks the scope and repository claim, and returns only stages whose current run record
+matches that repository. Each query reads one consistent database snapshot. Its wire reply is:
+
+```ts
+{
+  store: "found",
+  stacks: [{
+    name,
+    stages: [{
+      name, record, deployedHeadCommit,
+      resources: [{ fqn, value }],
+      output,
+    }],
+  }],
+}
+```
+
+Stacks, stages, and resources have deterministic name order. Resource values and output stay JSON
+strings. Before returning them, the query replaces any object that has `__redacted__` with
+`{ __redacted__: null }`, including nested values. It removes `samebase.run` from output. The
+raw internal state functions still return the stored values. The reader does not hide Convex query
+size limits or return a partial repository. A repository above the backend's read or result limit
+fails the query.
+
+The writer sends the record of its run with `state:set`, `state:remove`, and `state:setOutput`.
+The mutation stores it in `outputs.currentRun` in the same transaction as the resource change.
+`outputs.value` is optional so the first resource can appear before the output. `getOutput` and
+`readStack.output` stay `null` until the stack writes an output. `readStack.record` is the current
+record or `null`. A write without a record (see the run record section) clears `currentRun`, so
+the reader does not show the stage. `removeStack` removes both the resources and the output row,
+including the current record.
+
+`record` is `currentRun`. `deployedHeadCommit` is the `headCommit` of the output's
+`samebase.run` when that value passes the `runRecord` validator and names the same repository,
+else `null`. A new run can therefore appear while the deployed commit stays the last successful
+commit. Arbitrary JSON outputs stay valid; an output without a run record has no deployed commit.
+
+There is no immediate token revocation table. A refused renewal ends the normal client's access;
+an issued token remains valid until the backend rejects its expiry, including its clock tolerance
+(currently five seconds for custom JWTs). A local proof with a 60-second token rejected HTTP
+reads at expiry plus six seconds, and the open subscription stopped at expiry plus one second.
+The trusted server must not treat its deployment credential as a browser credential.
+
 ## Measured
 
 Proof: the public starter `samebase/base-alchemy` on a local branch, with the stack named
@@ -179,8 +235,8 @@ touched.
   duplicate that a person creates by hand still fails every run with `AmbiguousProject`.
 - The push of the store has no lock. Two runs of two package versions that both find an older
   store can push in the order new, then old, in the seconds between the second read of the version
-  and the end of the push; the next run of the newer package pushes its store again. The upgrade
-  happens once for each new package version in a team.
+  and the end of the push; the newer run then fails with both versions, and its next run pushes its
+  store again. The upgrade happens once for each new package version in a team.
 - A team access token (0.6.1): `GET /token_details` names its team, and the dashboard's team list
   answers it HTTP 403, so a slug is checked against the `teamSlug` of the team's projects instead;
   a team without a project needs the numeric id. Measured with a temporary team token on a

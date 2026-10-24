@@ -174,6 +174,18 @@ describe("Convex.state", () => {
 
     await run(service.set({ ...stack, fqn: "Project", value: created("Project") }));
     await run(service.setOutput({ ...stack, value: { url: "https://app.convex.site" } }));
+    expect(fake.sent.map((request) => request.body)).toEqual(
+      expect.arrayContaining(
+        ["state:set", "state:setOutput"].map((path) =>
+          expect.objectContaining({
+            path,
+            args: expect.objectContaining({
+              run: { ...record, recordedAt: expect.stringMatching(/Z$/) },
+            }),
+          }),
+        ),
+      ),
+    );
     expect(await run(service.list(stack))).toEqual(["Project"]);
     expect(await run(service.get({ ...stack, fqn: "Project" }))).toMatchObject({
       status: "created",
@@ -233,7 +245,7 @@ describe("Convex.state", () => {
     expect(await run(service.list(other))).toEqual(["Project"]);
   });
 
-  it("upgrades an older store and uses a newer one as it is", async () => {
+  it("upgrades an older store in place and fails on a newer one", async () => {
     const fake = new FakeConvex().install();
     const deployment =
       fake.project(fake.addProject({ name: STORE_PROJECT_NAME, teamId: TEAM }))
@@ -247,19 +259,11 @@ describe("Convex.state", () => {
     await run(open());
     expect(await run(runs())).toHaveLength(1);
 
-    // Another run pushed a newer store between the first read and the push: no push here.
-    fake.scripted.set(`POST ${deployment}.convex.cloud/api/function`, [
-      { status: 200, body: { ...stateFixture("function_version.json"), value: 0 } },
-    ]);
     store.version = STORE_VERSION + 1;
-    const { service } = await run(open());
+    expect(await failureOf(open())).toContain(
+      `answers store version ${STORE_VERSION + 1}, and this package needs store version ${STORE_VERSION}`,
+    );
     expect(await run(runs())).toHaveLength(1);
-    expect(await run(service.listStacks())).toEqual([]);
-
-    // A newer store serves this client: the names are a wire contract.
-    const newer = await run(open());
-    expect(await run(runs())).toHaveLength(1);
-    expect(await run(newer.service.listStacks())).toEqual([]);
   });
 
   it("stores the stack output with the run record, and the stack's own value under the key", async () => {

@@ -109,7 +109,7 @@ describe("alchemy-state", () => {
     });
     expect(await t.query(internal.state.readStack, { stack: "samebase/app" })).toEqual({
       stages: [
-        { stage: "empty", resources: [], output: '{"url":"e"}' },
+        { stage: "empty", resources: [], output: '{"url":"e"}', record: null },
         {
           stage: "main",
           resources: [
@@ -117,8 +117,9 @@ describe("alchemy-state", () => {
             { fqn: "B", value: '{"b":0}' },
           ],
           output: '{"url":"u"}',
+          record: null,
         },
-        { stage: "pr-1", resources: [{ fqn: "B", value: '{"b":1}' }], output: null },
+        { stage: "pr-1", resources: [{ fqn: "B", value: '{"b":1}' }], output: null, record: null },
       ],
     });
   });

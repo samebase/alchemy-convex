@@ -78,7 +78,13 @@ const STORE_MUTATIONS = ["set", "remove", "removeStack", "setOutput"];
 const STORE_FUNCTION_SINCE: Record<string, number> = { readStack: 2 };
 const FunctionCall = Schema.Struct({
   path: Schema.String,
-  args: Schema.Record(Schema.String, Schema.String),
+  args: Schema.Struct({
+    stack: Schema.optionalKey(Schema.String),
+    stage: Schema.optionalKey(Schema.String),
+    fqn: Schema.optionalKey(Schema.String),
+    value: Schema.optionalKey(Schema.String),
+    run: Schema.optionalKey(Schema.Unknown),
+  }),
 });
 /** One line of the fake CLI log: the hash of the key that the push got. */
 const CliRun = Schema.Struct({ keySha256: Schema.String });

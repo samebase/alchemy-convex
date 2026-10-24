@@ -1,17 +1,16 @@
 // The state functions of the alchemy-state project: one project for each
-// Convex team, pushed by Convex.state() from this directory. Every function
-// is internal: a public function of a root app answers anyone who knows the
-// deployment URL, with no key (measured). An internal function answers only
-// POST /api/function with a deploy key of the production deployment, the
-// call that `convex run` makes.
+// Convex team, pushed by Convex.state() from this directory. These raw state
+// functions are internal. reader.ts exposes authenticated, redacted reads.
 //
 // A stage holds one row for each resource of its stack, so the reads of one
-// stage collect all rows. The function names are a wire contract: Samebase
-// reads `stacks`, `getOutput`, and `readStack` by name, and an older client
-// calls an older set of names. Add functions; never rename or remove one.
+// stage collect all rows. Samebase reads `stacks`, `getOutput`, and
+// `readStack` by name: a renamed function is a version bump of the store and
+// of Samebase.
 import { v } from "convex/values";
-import type { QueryCtx } from "./_generated/server.js";
+import type { MutationCtx, QueryCtx } from "./_generated/server.js";
 import { internalMutation, internalQuery } from "./_generated/server.js";
+import { runRecord } from "./runRecord.ts";
+import type { RunRecord } from "../../RunRecord.ts";
 import { STORE_VERSION } from "./version.ts";
 
 /** The wire version of this store, compared with the client's STORE_VERSION. */
@@ -43,6 +42,18 @@ const outputOf = (ctx: QueryCtx, args: { stack: string; stage: string }) =>
     .query("outputs")
     .withIndex("by_stage", (q) => q.eq("stack", args.stack).eq("stage", args.stage))
     .unique();
+
+/** A resource write and its current run become visible in one transaction. */
+const writeCurrentRun = async (
+  ctx: MutationCtx,
+  args: { stack: string; stage: string; run?: RunRecord | undefined },
+) => {
+  const output = await outputOf(ctx, args);
+  // A write without a run record clears the record of the previous run.
+  if (output !== null) await ctx.db.patch("outputs", output._id, { currentRun: args.run });
+  else if (args.run !== undefined)
+    await ctx.db.insert("outputs", { stack: args.stack, stage: args.stage, currentRun: args.run });
+};
 
 /** The sorted union of two lists of names. */
 const union = (a: readonly string[], b: readonly string[]) => [...new Set([...a, ...b])].sort();
@@ -153,22 +164,30 @@ export const replaced = internalQuery({
 });
 
 export const set = internalMutation({
-  args: { ...resource, value: v.string() },
+  args: { ...resource, value: v.string(), run: v.optional(runRecord) },
   returns: v.null(),
   handler: async (ctx, args) => {
     const row = await rowOf(ctx, args);
-    if (row === null) await ctx.db.insert("resources", args);
+    if (row === null)
+      await ctx.db.insert("resources", {
+        stack: args.stack,
+        stage: args.stage,
+        fqn: args.fqn,
+        value: args.value,
+      });
     else await ctx.db.patch("resources", row._id, { value: args.value });
+    await writeCurrentRun(ctx, args);
     return null;
   },
 });
 
 export const remove = internalMutation({
-  args: resource,
+  args: { ...resource, run: v.optional(runRecord) },
   returns: v.null(),
   handler: async (ctx, args) => {
     const row = await rowOf(ctx, args);
     if (row !== null) await ctx.db.delete("resources", row._id);
+    await writeCurrentRun(ctx, args);
     return null;
   },
 });
@@ -208,12 +227,14 @@ export const getOutput = internalQuery({
 });
 
 export const setOutput = internalMutation({
-  args: { ...stage, value: v.string() },
+  args: { ...stage, value: v.string(), run: v.optional(runRecord) },
   returns: v.null(),
   handler: async (ctx, args) => {
     const row = await outputOf(ctx, args);
-    if (row === null) await ctx.db.insert("outputs", args);
+    if (row === null)
+      await ctx.db.insert("outputs", { stack: args.stack, stage: args.stage, value: args.value });
     else await ctx.db.patch("outputs", row._id, { value: args.value });
+    await writeCurrentRun(ctx, args);
     return null;
   },
 });
@@ -235,6 +256,7 @@ export const readStack = internalQuery({
         stage: v.string(),
         resources: v.array(v.object({ fqn: v.string(), value: v.string() })),
         output: v.union(v.string(), v.null()),
+        record: v.union(runRecord, v.null()),
       }),
     ),
   }),
@@ -253,13 +275,17 @@ export const readStack = internalQuery({
       [...new Set(outputs.map((row) => row.stage))],
     );
     return {
-      stages: stages.map((stage) => ({
-        stage,
-        resources: resources
-          .filter((row) => row.stage === stage)
-          .map((row) => ({ fqn: row.fqn, value: row.value })),
-        output: outputs.find((row) => row.stage === stage)?.value ?? null,
-      })),
+      stages: stages.map((stage) => {
+        const output = outputs.find((row) => row.stage === stage);
+        return {
+          stage,
+          resources: resources
+            .filter((row) => row.stage === stage)
+            .map((row) => ({ fqn: row.fqn, value: row.value })),
+          output: output?.value ?? null,
+          record: output?.currentRun ?? null,
+        };
+      }),
     };
   },
 });
