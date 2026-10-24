@@ -11,6 +11,7 @@
   each stage; `getOutput` stays null until the stack writes an output. The reader lists a stage
   only after a 0.9.0 run writes to it.
 - Store version 3 is pushed on the next provider run. Convex 1.48.0 or newer is required.
+- A store that is newer than the package fails the run with both versions.
 
 ## 0.8.0 (unreleased)
 

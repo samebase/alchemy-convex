@@ -135,11 +135,12 @@ is set must be the slug of that team, checked against its projects, and a token 
 fails the run. The Convex CLI login needs the slug or the id. The first run of a team creates
 the project `alchemy-state` and pushes the store functions to its
 production deployment with the Convex CLI of the app; a later version of this package pushes a
-newer store when it finds an older one, and never an older one over a newer one. Each run makes a
+newer store when it finds an older one. A store that is newer than the package fails the run with
+both versions, so the repositories of a team upgrade the package together. Each run makes a
 deploy key of that deployment that can only run the store's internal functions, and deletes it at
 the end. Rows are in the tables `resources` and `outputs` in the dashboard, under the stack name.
 The store has no lock: run one deploy of a stage at a time, such as with a CI concurrency group.
-The names of the store functions are a wire contract: never renamed or removed.
+The store and its readers (Samebase) are released and upgraded together.
 
 Store version 3 supports native subscriptions. A trusted server checks repository access, then
 calls internal `reader:authorize({ repository, subject })` with a deployment credential. It gives

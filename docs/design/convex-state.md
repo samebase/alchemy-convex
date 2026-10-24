@@ -52,10 +52,10 @@ reads.
   push `src/store/convex` with the Convex CLI of the app, `convex deploy --typecheck disable
   --codegen disable`, from `src/store` of the installed package, with a push key of
   `PUSH_KEY_ACTIONS` that is deleted after the push. The version is read again right before the
-  push, because another run can push a newer store in the meantime. A newer number is used as it
-  is: the names are a wire contract, so a newer store serves an older client, and the store is never
-  pushed back. Unlike the Cloudflare store, which compares for equality and would deploy an older
-  Worker over a newer one. A deployment with code but no `state:version` is another app with the
+  push, because another run can push a newer store in the meantime. A newer number fails the run
+  with both versions: the store and its clients are released and upgraded together, and the store
+  is never pushed back. Unlike the Cloudflare store, which compares for equality and would deploy an
+  older Worker over a newer one. A deployment with code but no `state:version` is another app with the
   name of the store, and the run fails instead of pushing over it.
 - The functions directory is found from the module: `src/State.ts` in a checkout, `lib/index.js` in
   the installed package, and `../src/store/convex` from either, because the package ships `src`.
@@ -63,10 +63,10 @@ reads.
   directory above the functions, so `src/store/package.json` declares the peer dependency. The CLI
   comes from `createRequire(src/store/package.json).resolve("convex/package.json")`: the `convex`
   of the app, through the virtual store of pnpm or the flat `node_modules` of npm.
-- Function names are a wire contract: Samebase calls `state:stacks`, `state:stages`,
-  `state:list`, `state:get`, and `state:getOutput` by name, and an older package calls an older
-  set. Add functions, never rename or remove one. `stacks` and `stages` list a stage that has only
-  an output row too, so a reader sees a stack with no resources.
+- Samebase calls `state:stacks`, `state:stages`, `state:list`, `state:get`, and
+  `state:getOutput` by name. The store and Samebase are released and upgraded together: a renamed
+  function is a version bump on both sides. `stacks` and `stages` list a stage that has only an
+  output row too, so a reader sees a stack with no resources.
 - Not kept from 0.5.0: the `alchemyState` component, its `convex.config` export, and
   `CONVEX_STATE_DEPLOY_KEY`. The 0.5.0 rows are not migrated: a stack moves with one
   `alchemy deploy --adopt`, which takes its project and deployments over by name.
@@ -234,8 +234,8 @@ touched.
   duplicate that a person creates by hand still fails every run with `AmbiguousProject`.
 - The push of the store has no lock. Two runs of two package versions that both find an older
   store can push in the order new, then old, in the seconds between the second read of the version
-  and the end of the push; the next run of the newer package pushes its store again. The upgrade
-  happens once for each new package version in a team.
+  and the end of the push; the newer run then fails with both versions, and its next run pushes its
+  store again. The upgrade happens once for each new package version in a team.
 - A team access token (0.6.1): `GET /token_details` names its team, and the dashboard's team list
   answers it HTTP 403, so a slug is checked against the `teamSlug` of the team's projects instead;
   a team without a project needs the numeric id. Measured with a temporary team token on a

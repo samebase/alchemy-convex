@@ -22,11 +22,11 @@
 // The run whose project is not the oldest deletes its own, before it writes
 // anything, and uses the oldest: both runs end on one store.
 //
-// The function names are a wire contract: Samebase reads `stacks`,
-// `getOutput`, and `readStack` by name, and an older client calls an older
-// set of names. A name is never renamed or removed. STORE_VERSION rises when
-// a function is added or changes in a way that an older client cannot use,
-// and a client never pushes an older store over a newer one.
+// Samebase reads `stacks`, `getOutput`, `readStack`, and `reader:repository`
+// by name. The store and its readers are released and upgraded together:
+// STORE_VERSION rises with each change of a function, and a client works only
+// with a store of its own version. An older store is pushed over; a newer one
+// fails the run.
 //
 // The stage output that `setOutput` stores is the stack's output plus the
 // run record of src/RunRecord.ts under the key `samebase.run`: the
@@ -377,7 +377,7 @@ export const makeConvexState = (options: StoreOptions) =>
         ),
     };
 
-    const version = yield* storeVersion(functions);
+    let version = yield* storeVersion(functions);
     if (version === undefined || version < STORE_VERSION) {
       // Code without `state:version` is another app with the name of the store.
       if (version === undefined && deployment.lastDeployTime) {
@@ -387,20 +387,15 @@ export const makeConvexState = (options: StoreOptions) =>
       }
       // Another run can push a newer store in the meantime: read again right
       // before the push. The push itself has no lock (see the design note).
-      const now = yield* storeVersion(functions);
-      if (now === undefined || now < STORE_VERSION) {
+      version = yield* storeVersion(functions);
+      if (version === undefined || version < STORE_VERSION) {
         yield* pushStore(options, deployment);
-        const pushed = yield* storeVersion(functions);
-        if (pushed === undefined || pushed < STORE_VERSION) {
-          return yield* failure(
-            `${deployment.name} answers store version ${pushed ?? "none"} after the push of version ${STORE_VERSION}.`,
-          );
-        }
+        version = yield* storeVersion(functions);
       }
-    } else if (version > STORE_VERSION) {
-      // The names are a wire contract, so a newer store serves this client.
-      yield* Effect.logInfo(
-        `Convex state: the store of team ${team} is version ${version}, newer than version ${STORE_VERSION} of this package, and it stays.`,
+    }
+    if (version !== STORE_VERSION) {
+      return yield* failure(
+        `${deployment.name} answers store version ${version ?? "none"}, and this package needs store version ${STORE_VERSION}.`,
       );
     }
 

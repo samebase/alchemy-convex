@@ -3,9 +3,9 @@
 // functions are internal. reader.ts exposes authenticated, redacted reads.
 //
 // A stage holds one row for each resource of its stack, so the reads of one
-// stage collect all rows. The function names are a wire contract: Samebase
-// reads `stacks`, `getOutput`, and `readStack` by name, and an older client
-// calls an older set of names. Add functions; never rename or remove one.
+// stage collect all rows. Samebase reads `stacks`, `getOutput`, and
+// `readStack` by name: a renamed function is a version bump of the store and
+// of Samebase.
 import { v } from "convex/values";
 import type { MutationCtx, QueryCtx } from "./_generated/server.js";
 import { internalMutation, internalQuery } from "./_generated/server.js";
