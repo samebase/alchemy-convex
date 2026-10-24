@@ -5,7 +5,6 @@ import * as Namespace from "alchemy/Namespace";
 import * as Provider from "alchemy/Provider";
 import * as State from "alchemy/State";
 import * as Test from "alchemy/Test/Vitest";
-import { componentsGeneric, makeFunctionReference } from "convex/server";
 import { convexTest } from "convex-test";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -18,7 +17,6 @@ import schema from "../src/store/convex/schema.ts";
 import { FakeConvex } from "./fakeConvex.ts";
 
 const modules = import.meta.glob("../src/store/convex/**/*.ts");
-const components = componentsGeneric();
 type Consumer = Resource<"Test.UrlConsumer", { url: string }, { url: string; revision: number }>;
 const Consumer = Resource<Consumer>("Test.UrlConsumer");
 const { test } = Test.make({
@@ -36,7 +34,7 @@ test.provider("changes component bindings without replacing resources or pushing
   Effect.gen(function* () {
     const fake = new FakeConvex().install();
     const projectId = fake.addProject({ name: "component-bindings", teamId: 38516 });
-    const program = (component: unknown) =>
+    const program = (component: string | null) =>
       Effect.gen(function* () {
         const deployment = yield* Convex.Deployment("Deployment", {
           project: { projectId },
@@ -70,16 +68,16 @@ test.provider("changes component bindings without replacing resources or pushing
     const initial = yield* stack.deploy(program(null));
     const before = yield* row();
     assert.ok(before !== undefined && "instanceId" in before);
-    expect(yield* stack.deploy(program(components.mail))).toEqual(initial);
+    expect(yield* stack.deploy(program("mail"))).toEqual(initial);
     const bound = yield* row();
     const binding = {
       sid: 'convex.component:["Mail"]',
       data: { type: "component", path: "mail", namespace: ["Mail"] },
     };
     expect(bound).toMatchObject({ instanceId: before.instanceId, bindings: [binding] });
-    expect(yield* stack.deploy(program(components.mail))).toEqual(initial);
+    expect(yield* stack.deploy(program("mail"))).toEqual(initial);
     expect(yield* row()).toEqual(bound);
-    expect(yield* stack.deploy(program(components.renamed))).toEqual(initial);
+    expect(yield* stack.deploy(program("renamed"))).toEqual(initial);
     expect(yield* row()).toMatchObject({
       instanceId: before.instanceId,
       bindings: [{ data: { path: "renamed" } }],
@@ -123,7 +121,7 @@ test.provider("changes component bindings without replacing resources or pushing
   }),
 );
 
-test.provider("uses generated parent references, root, and multiple namespaces", (stack) =>
+test.provider("binds nested components, the stack root, and multiple namespaces", (stack) =>
   Effect.gen(function* () {
     const fake = new FakeConvex().install();
     const projectId = fake.addProject({ name: "nested-bindings", teamId: 38516 });
@@ -135,7 +133,7 @@ test.provider("uses generated parent references, root, and multiple namespaces",
         });
         yield* Convex.bindComponent({
           deployment,
-          component: components.workspace,
+          component: "workspace",
           namespace: undefined,
         });
         yield* Namespace.push(
@@ -143,7 +141,7 @@ test.provider("uses generated parent references, root, and multiple namespaces",
           Effect.gen(function* () {
             yield* Convex.bindComponent({
               deployment,
-              component: components.workspace,
+              component: "workspace",
               namespace: yield* Namespace.CurrentNamespace,
             });
           }),
@@ -155,8 +153,7 @@ test.provider("uses generated parent references, root, and multiple namespaces",
             Effect.gen(function* () {
               const options = {
                 deployment,
-                component: components.mail,
-                parents: [components.workspace],
+                component: "workspace/mail",
                 namespace: yield* Namespace.CurrentNamespace,
               };
               yield* Convex.bindComponent(options);
@@ -188,37 +185,35 @@ test.provider("uses generated parent references, root, and multiple namespaces",
   }),
 );
 
-test.provider(
-  "rejects function references and conflicting namespace assignments before apply",
-  (stack) =>
-    Effect.gen(function* () {
-      const fake = new FakeConvex().install();
-      const projectId = fake.addProject({ name: "bad-bindings", teamId: 38516 });
-      for (const component of [makeFunctionReference<"mutation">("mail:send"), components.other]) {
-        const result = yield* stack
-          .deploy(
-            Effect.gen(function* () {
-              const deployment = yield* Convex.Deployment("Deployment", {
-                project: { projectId },
-                type: "prod",
-              });
-              yield* Namespace.push(
-                "Mail",
-                Effect.gen(function* () {
-                  const namespace = yield* Namespace.CurrentNamespace;
-                  yield* Convex.bindComponent({
-                    deployment,
-                    component: components.mail,
-                    namespace,
-                  });
-                  yield* Convex.bindComponent({ deployment, component, namespace });
-                }),
-              );
-            }),
-          )
-          .pipe(Effect.exit);
-        expect(Exit.isFailure(result)).toBe(true);
-      }
-      expect(fake.lines()).toEqual([]);
-    }),
+test.provider("rejects empty names and conflicting namespace assignments before apply", (stack) =>
+  Effect.gen(function* () {
+    const fake = new FakeConvex().install();
+    const projectId = fake.addProject({ name: "bad-bindings", teamId: 38516 });
+    for (const component of ["", "other"]) {
+      const result = yield* stack
+        .deploy(
+          Effect.gen(function* () {
+            const deployment = yield* Convex.Deployment("Deployment", {
+              project: { projectId },
+              type: "prod",
+            });
+            yield* Namespace.push(
+              "Mail",
+              Effect.gen(function* () {
+                const namespace = yield* Namespace.CurrentNamespace;
+                yield* Convex.bindComponent({
+                  deployment,
+                  component: "mail",
+                  namespace,
+                });
+                yield* Convex.bindComponent({ deployment, component, namespace });
+              }),
+            );
+          }),
+        )
+        .pipe(Effect.exit);
+      expect(Exit.isFailure(result)).toBe(true);
+    }
+    expect(fake.lines()).toEqual([]);
+  }),
 );
