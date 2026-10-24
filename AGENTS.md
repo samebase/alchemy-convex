@@ -13,6 +13,8 @@
   remove. See `docs/design/convex-state.md`.
 - The Convex CLI owns typecheck, codegen, bundling, and the code push. `Convex.Deployment` only runs
   the installed `convex deploy`. Do not move work of the Convex CLI into this package.
+- No backwards compatibility with earlier versions of this package, its store, or its data:
+  consumers are upgraded instead. No fallbacks, no migrations, no version branches.
 - Credentials are a layer, never props. No deploy key goes from one resource to another, and the
   only key the provider deletes is the short-lived push key that it created.
 
