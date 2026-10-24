@@ -116,10 +116,19 @@ Effect.gen(function* () {
 });
 ```
 
-The deployment's Alchemy state row stores `{ type: "component", path: "mail", namespace: ["Mail"] }`
-in its native `bindings` array. The deployment attributes identify the Convex deployment; the row's
-stack and stage identify the Alchemy scope. The live repository reader includes the binding through
-its existing resource JSON. No extra resource list, state table, or subscription is needed.
+The deployment's Alchemy state row stores this entry in its native `bindings` array:
+
+```json
+{
+  "sid": "convex.component:[\"Mail\"]",
+  "data": { "type": "component", "path": "mail", "namespace": ["Mail"] }
+}
+```
+
+Readers inspect each binding's `data`. The deployment attributes identify the Convex deployment;
+the row's stack and stage identify the Alchemy scope. The live repository reader includes the
+binding through its existing resource JSON. No extra resource list, state table, or subscription
+is needed.
 
 Use actual namespace ancestry when grouping resources. A slash in a resource's logical ID is not a
 namespace boundary. For nested components, pass `parents: [components.parent]` with the child's
