@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.0 (unreleased)
+
+- The state store supports native Convex subscriptions through `reader:repository`. An internal
+  `reader:authorize` mutation issues a five-minute token for one repository. The store uses its
+  own Convex signing key and public JWKS endpoint. Tokens do not permit state writes. Secret
+  values marked with `__redacted__` are removed before a subscription returns data.
+- Resource writes and deletes now record the current run in the same transaction. A first deploy
+  appears before its final output is written. `state:readStack` includes the current `record` of
+  each stage; `getOutput` stays null until the stack writes an output. Old writers and their
+  `samebase.run` output records remain supported.
+- Store version 3 is pushed on the next provider run. Convex 1.48.0 or newer is required.
+
 ## 0.8.0 (unreleased)
 
 `Convex.Deployment` takes `rootDir`: the app directory, relative to the directory where the deploy

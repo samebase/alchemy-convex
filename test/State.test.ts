@@ -174,6 +174,18 @@ describe("Convex.state", () => {
 
     await run(service.set({ ...stack, fqn: "Project", value: created("Project") }));
     await run(service.setOutput({ ...stack, value: { url: "https://app.convex.site" } }));
+    expect(fake.sent.map((request) => request.body)).toEqual(
+      expect.arrayContaining(
+        ["state:set", "state:setOutput"].map((path) =>
+          expect.objectContaining({
+            path,
+            args: expect.objectContaining({
+              run: { ...record, recordedAt: expect.stringMatching(/Z$/) },
+            }),
+          }),
+        ),
+      ),
+    );
     expect(await run(service.list(stack))).toEqual(["Project"]);
     expect(await run(service.get({ ...stack, fqn: "Project" }))).toMatchObject({
       status: "created",

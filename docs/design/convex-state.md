@@ -34,7 +34,7 @@ reads.
   is the GitHub repository, `owner/name`, so `stacks` is the index that Samebase reads.
 - The store exists before the stack runs, so there is no local or in-memory state during a
   bootstrap: the project and the push happen before the engine reads anything.
-- Every function of the store is internal. Measured: a public function of a root app answers
+- The raw state functions are internal. Measured: a public function of a root app answers
   `POST /api/mutation` and `/api/query` with no key at all
   (`test/fixtures/state/public_mutation_no_key.json`). An internal function answers only
   `POST /api/function` with a deploy key of the deployment, the call that `convex run` makes; without
@@ -131,6 +131,63 @@ Limits of the record: a failed deploy leaves the previous record, and a deploy o
 successful apply. The record therefore describes the last full successful deploy of the stage, which
 is what the resources of the stage reflect; the failed run is GitHub's fact. A dirty laptop tree is
 recorded by its last commit.
+
+## Repository subscriptions (0.9.0)
+
+Store version 3 adds `reader:authorize`, an internal mutation. A trusted server must check the
+user's current repository and team access before each call. It sends `{ repository, subject }`
+with a deployment credential that can run internal mutations. The reply is `{ token }`. The
+token is signed with the deployment's native ES256 key, has a 300-second lifetime, and contains
+`scope: "alchemy:read"` and the exact repository. Its audience is the deployment's cloud URL plus
+`/alchemy-reader`. `auth.config.ts` accepts only that deployment's issuer, native JWKS, and
+audience. This requires Convex 1.48.0 or newer. Deployment credentials stay on the trusted server.
+
+The browser connects a separate `ConvexClient` to the store, uses `setAuth` to get and renew the
+token, then subscribes to `reader:repository({})`. The query takes no repository argument. It
+reads the exact stack name and names that start with `repository + "/"`, with indexed ranges.
+It checks the scope and repository claim, and returns only stages whose run record matches that
+repository. Each query reads one consistent database snapshot. Its wire reply is:
+
+```ts
+{
+  store: "found",
+  stacks: [{
+    name,
+    stages: [{
+      name, record, deployedHeadCommit,
+      resources: [{ fqn, value }],
+      output,
+    }],
+  }],
+}
+```
+
+Stacks, stages, and resources have deterministic name order. Resource values and output stay JSON
+strings. Before returning them, the query replaces any object that has `__redacted__` with
+`{ __redacted__: null }`, including nested values. It removes `samebase.run` from output and
+returns the validated record separately. The raw internal state functions still return the stored
+values. The reader does not hide Convex query size limits or return a partial repository. A
+repository above the backend's read or result limit fails the query.
+
+New writers include the current run on `state:set`, `state:remove`, and `state:setOutput`. The
+mutation stores it in `outputs.currentRun` in the same transaction as the resource change.
+`outputs.value` is optional so the first resource can appear before final output. `getOutput`
+and `readStack.output` remain `null` until there is real output. `readStack.record` is the current
+record or `null`; an older reader can still derive the last completed record from output.
+`removeStack` removes both the resources and the output row, including the current record.
+
+The public reader prefers `currentRun`, then falls back to the old output's `samebase.run`.
+`deployedHeadCommit` comes only from a valid repository-matching output record. A new run can
+therefore appear while the deployed commit remains the last successful commit. With no successful
+output it is `null`. Old writers clear `currentRun` when they write. They show only the last
+successful output record and cannot show the first run before output. Arbitrary JSON outputs stay
+valid; outputs without a run record cannot identify a deployed commit.
+
+There is no immediate token revocation table. A refused renewal ends the normal client's access;
+an issued token remains valid until the backend rejects its expiry, including its clock tolerance
+(currently five seconds for custom JWTs). A local proof with a 60-second token rejected HTTP
+reads at expiry plus six seconds, and the open subscription stopped at expiry plus one second.
+The trusted server must not treat its deployment credential as a browser credential.
 
 ## Measured
 

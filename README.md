@@ -141,6 +141,14 @@ the end. Rows are in the tables `resources` and `outputs` in the dashboard, unde
 The store has no lock: run one deploy of a stage at a time, such as with a CI concurrency group.
 The names of the store functions are a wire contract: never renamed or removed.
 
+Store version 3 supports native subscriptions. A trusted server checks repository access, then
+calls internal `reader:authorize({ repository, subject })` with a deployment credential. It gives
+the returned token to a separate `ConvexClient` connected to the state deployment. The client
+subscribes to `reader:repository({})`; the verified token selects the repository. The token has a
+five-minute lifetime and permits redacted reads only. The server checks access again on renewal.
+The store uses its own native signing key and JWKS, so no extra signing secret is required.
+See [the reader contract](docs/design/convex-state.md#repository-subscriptions-090).
+
 ### What the output records about a run
 
 Alchemy state holds no time, commit, branch, or run. `Convex.state()` adds them to the stage output:

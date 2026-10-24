@@ -7,4 +7,5 @@
 // 1: `version`, `stacks`, `stages`, `list`, `get`, `replaced`, `getOutput`,
 //    `set`, `remove`, `removeStack`, `setOutput` (0.6.0).
 // 2: `readStack` (0.7.0).
-export const STORE_VERSION = 2;
+// 3: authenticated subscriptions and current stage run records (0.9.0).
+export const STORE_VERSION = 3;

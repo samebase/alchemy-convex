@@ -32,11 +32,11 @@ importers:
         specifier: 2.0.0-beta.83
         version: 2.0.0-beta.83(@arethetypeswrong/core@0.18.5)(@effect/platform-node@4.0.4(effect@4.0.4)(redis@6.3.0))(@effect/vitest@4.0.4(effect@4.0.4)(vitest@5.0.3))(@types/node@24.19.2)(effect@4.0.4)(esbuild@0.27.0)(hono@4.11.4)(publint@0.3.25)(typescript@6.0.3)(ws@8.22.0)
       convex:
-        specifier: 1.46.0
-        version: 1.46.0
+        specifier: 1.48.0
+        version: 1.48.0
       convex-test:
         specifier: 0.0.60
-        version: 0.0.60(convex@1.46.0)
+        version: 0.0.60(convex@1.48.0)
       effect:
         specifier: 4.0.4
         version: 4.0.4
@@ -1718,8 +1718,8 @@ packages:
     peerDependencies:
       convex: ^1.43.0
 
-  convex@1.46.0:
-    resolution: {integrity: sha512-dhBwDQTZDOhi5SUGAX17EWNehCdNq6/UFrSL0eLZuGfMkdsQbCVWVRZCzbZ5CF+/pgvoGxtApbEoTSipqL4JTw==}
+  convex@1.48.0:
+    resolution: {integrity: sha512-M9jEgTvCN8ziP/VgQQUH+j0ijM7g+NmQd8tFlvETK8/HMC/aaqHZwcu4hBO30X5DV2VIyYK4mOoLQGIb1766ew==}
     engines: {node: '>=20.0.0', npm: '>=7.0.0'}
     hasBin: true
     peerDependencies:
@@ -3613,11 +3613,11 @@ snapshots:
 
   convert-source-map@2.0.0: {}
 
-  convex-test@0.0.60(convex@1.46.0):
+  convex-test@0.0.60(convex@1.48.0):
     dependencies:
-      convex: 1.46.0
+      convex: 1.48.0
 
-  convex@1.46.0:
+  convex@1.48.0:
     dependencies:
       esbuild: 0.27.0
       prettier: 3.9.9
