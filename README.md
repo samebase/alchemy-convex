@@ -91,6 +91,55 @@ Effect.gen(function* () {
 State always holds `rootDir`, `"."` included, so a reader of the state finds the app directory of
 each deployment.
 
+### Resources associated with an installed component
+
+Keep the component's native Alchemy resource declarations. Connect their namespace to the installed
+component name in the consuming app's stack. The name comes from the app's `convex.config.ts`:
+`app.use(mail, { name: "mail" })` installs the component as `"mail"`.
+
+```ts
+import { bindComponent } from "@samebase/alchemy-convex";
+import * as Effect from "effect/Effect";
+
+// `production` is this app's Convex.Deployment. EmailInbox creates its resources under "Mail".
+Effect.gen(function* () {
+  const inbox = yield* EmailInbox("Mail", {
+    convexSiteUrl: production.siteUrl,
+    zone,
+    sendingDomain,
+  });
+  yield* bindComponent({
+    deployment: production,
+    component: "mail",
+    namespace: inbox.worker.Namespace,
+  });
+});
+```
+
+The deployment's Alchemy state row stores this entry in its native `bindings` array:
+
+```json
+{
+  "sid": "convex.component:[\"Mail\"]",
+  "data": { "type": "component", "path": "mail", "namespace": ["Mail"] }
+}
+```
+
+Readers inspect each binding's `data`. The deployment attributes identify the Convex deployment;
+the row's stack and stage identify the Alchemy scope. The live repository reader includes the
+binding through its existing resource JSON. No extra resource list, state table, or subscription
+is needed.
+
+Use actual namespace ancestry when grouping resources. A slash in a resource's logical ID is not a
+namespace boundary. For a nested install, join the installed names with slashes, such as
+`"workspace/mail"`. An undefined namespace means the stack root. Each namespace can be assigned to
+one component per deployment; a component can have multiple namespaces. A more specific child
+namespace takes precedence when displaying resources.
+
+The connection is declared metadata. It does not check that the component is installed, push code,
+set environment values, or change resource deletion policies. Removing the call removes the binding
+on the next apply.
+
 ## Credentials
 
 Credentials are a layer, never props, so they do not go into Alchemy state. `Convex.providers()`

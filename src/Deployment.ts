@@ -54,7 +54,7 @@
 import { posix, win32 } from "node:path";
 import { Resource } from "alchemy";
 import { OwnedBySomeoneElse, Unowned } from "alchemy/AdoptPolicy";
-import { isResolved } from "alchemy/Diff";
+import { diffBindings, isResolved } from "alchemy/Diff";
 import type { InputProps } from "alchemy/Input";
 import * as Provider from "alchemy/Provider";
 import * as Effect from "effect/Effect";
@@ -63,6 +63,7 @@ import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import { shouldAdopt } from "./Adoption.ts";
 import { Credentials } from "./Credentials.ts";
+import type { ComponentBinding } from "./Component.ts";
 import {
   absentAsUndefined,
   type ConvexApiError,
@@ -145,7 +146,7 @@ export type Deployment = Resource<
   "Convex.Deployment",
   DeploymentProps,
   DeploymentAttributes,
-  never,
+  ComponentBinding,
   Providers
 >;
 /** The resource class. Stacks call {@link Deployment}, which writes `rootDir` into the props. */
@@ -597,9 +598,10 @@ export const DeploymentProvider = () =>
         // the refused props. Only `rootDir` compares with `olds`, because it
         // is in the props only. A refused update leaves the row `updating`,
         // and the next plan updates it again anyway.
-        diff: Effect.fn(function* ({ news, olds, output }) {
+        diff: Effect.fn(function* ({ news, olds, output, oldBindings, newBindings }) {
           if (!isResolved(news) || output === undefined) return undefined;
           yield* checkIdentity(output, news);
+          if (!isResolved(newBindings)) return undefined;
           // State from 0.7 has no rootDir; the constructor always writes it.
           const rootDir = news.rootDir ?? ".";
           // Also here, so that a wrong rootDir stops the plan before Apply
@@ -617,9 +619,21 @@ export const DeploymentProvider = () =>
           const current = yield* live(access, output);
           if (current?.name !== output.name) return { action: "update" } as const;
           const hash = yield* wantedHash(news, rootDir, output.name);
-          return hash === output.hash
-            ? ({ action: "noop" } as const)
-            : ({ action: "update" } as const);
+          if (hash !== output.hash) return { action: "update" } as const;
+          if (diffBindings(oldBindings, newBindings).every((binding) => binding.action === "noop"))
+            return { action: "noop" } as const;
+          // Binding metadata does not change deployment outputs. Keep unchanged
+          // values available to consumers so the plan does not update them too.
+          return {
+            action: "update" as const,
+            stables: [
+              "hash",
+              "envNames",
+              ...(
+                ["projectId", "type", "previewName", "name", "reference", "url", "siteUrl"] as const
+              ).filter((key) => current[key] === output[key]),
+            ],
+          };
         }),
 
         read: Effect.fn(function* ({ olds, output }) {

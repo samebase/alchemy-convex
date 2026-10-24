@@ -1,4 +1,5 @@
 // @samebase/alchemy-convex: the Convex plane for Alchemy v2.
+export { bindComponent, type ComponentBinding } from "./Component.ts";
 export {
   ACCESS_TOKEN_ENV,
   Credentials,

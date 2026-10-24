@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.10.0 (unreleased)
+
+- `bindComponent` connects the installed name of a Convex component, as in the app's
+  `convex.config.ts`, to a native Alchemy namespace.
+  The connection is stored in the deployment resource's native bindings and is included in the
+  existing live reader. Component connections can change without a code push or resource replacement.
+  Environment variables, component installation, and resource removal policies stay with their existing owners.
+
 ## 0.9.0 (unreleased)
 
 - The state store supports native Convex subscriptions through `reader:repository`. An internal
