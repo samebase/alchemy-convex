@@ -91,6 +91,47 @@ Effect.gen(function* () {
 State always holds `rootDir`, `"."` included, so a reader of the state finds the app directory of
 each deployment.
 
+### Resources associated with an installed component
+
+Keep the component's native Alchemy resource declarations. Connect their namespace to the generated
+component reference in the consuming app's stack:
+
+```ts
+import { bindComponent } from "@samebase/alchemy-convex";
+import * as Effect from "effect/Effect";
+import { components } from "./convex/_generated/api.js";
+
+// `production` is this app's Convex.Deployment. EmailInbox creates its resources under "Mail".
+Effect.gen(function* () {
+  const inbox = yield* EmailInbox("Mail", {
+    convexSiteUrl: production.siteUrl,
+    zone,
+    sendingDomain,
+  });
+  yield* bindComponent({
+    deployment: production,
+    component: components.mail,
+    namespace: inbox.worker.Namespace,
+  });
+});
+```
+
+The deployment's Alchemy state row stores `{ type: "component", path: "mail", namespace: ["Mail"] }`
+in its native `bindings` array. The deployment attributes identify the Convex deployment; the row's
+stack and stage identify the Alchemy scope. The live repository reader includes the binding through
+its existing resource JSON. No extra resource list, state table, or subscription is needed.
+
+Use actual namespace ancestry when grouping resources. A slash in a resource's logical ID is not a
+namespace boundary. For nested components, pass `parents: [components.parent]` with the child's
+generated reference. An undefined namespace means the stack root. Each namespace can be assigned to
+one component per deployment; a component can have multiple namespaces. A more specific child
+namespace takes precedence when displaying resources.
+
+The connection is declared metadata. It does not check that the component is installed, push code,
+set environment values, or change resource deletion policies. Removing the call removes the binding
+on the next apply. The helper reads Convex's internal component reference encoding, tested with
+Convex 1.48.0.
+
 ## Credentials
 
 Credentials are a layer, never props, so they do not go into Alchemy state. `Convex.providers()`
