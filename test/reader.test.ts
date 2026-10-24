@@ -169,6 +169,29 @@ describe("repository reader", () => {
     expect(await reader.query(api.reader.repository, {})).toEqual({ store: "found", stacks: [] });
   });
 
+  it("hides a stage after a write without a run record", async () => {
+    const t = convexTest(schema, modules);
+    const reader = t.withIdentity(identity);
+    await t.mutation(internal.state.set, {
+      stack: run.repository,
+      stage: "main",
+      fqn: "Worker",
+      value: "{}",
+      run,
+    });
+    expect((await reader.query(api.reader.repository, {})).stacks).toHaveLength(1);
+    await t.mutation(internal.state.set, {
+      stack: run.repository,
+      stage: "main",
+      fqn: "Worker",
+      value: "{}",
+    });
+    expect(await reader.query(api.reader.repository, {})).toEqual({ store: "found", stacks: [] });
+    expect(await t.query(internal.state.readStack, { stack: run.repository })).toMatchObject({
+      stages: [{ stage: "main", record: null }],
+    });
+  });
+
   it("preserves arbitrary JSON output while removing nested secrets", async () => {
     const t = convexTest(schema, modules);
     for (const value of [null, "text", 1, false, [1, { __redacted__: "private" }]]) {

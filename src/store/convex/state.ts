@@ -48,11 +48,11 @@ const writeCurrentRun = async (
   ctx: MutationCtx,
   args: { stack: string; stage: string; run?: RunRecord | undefined },
 ) => {
-  if (args.run === undefined) return;
   const output = await outputOf(ctx, args);
-  if (output === null)
+  // A write without a run record clears the record of the previous run.
+  if (output !== null) await ctx.db.patch("outputs", output._id, { currentRun: args.run });
+  else if (args.run !== undefined)
     await ctx.db.insert("outputs", { stack: args.stack, stage: args.stage, currentRun: args.run });
-  else await ctx.db.patch("outputs", output._id, { currentRun: args.run });
 };
 
 /** The sorted union of two lists of names. */
