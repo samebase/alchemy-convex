@@ -9,7 +9,7 @@
 //   npx alchemy deploy --stage pr-42
 //   npx alchemy destroy --stage pr-42
 import * as Alchemy from "alchemy";
-import * as Cloudflare from "alchemy/Cloudflare";
+import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as RemovalPolicy from "alchemy/RemovalPolicy";
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
