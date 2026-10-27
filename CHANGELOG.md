@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.11.0 (unreleased)
+
+Works with Alchemy 2.0.0-beta.84. The code, the resources, the state store, and its data do not
+change.
+
+- Breaking: peer dependency `alchemy` is `2.0.0-beta.84` (was `2.0.0-beta.83`). Upgrade `alchemy`
+  together with this version. The `effect` and `@effect/platform-node` peer ranges are `^4.0.5`
+  (were `^4.0.0`), the ranges that `alchemy` 2.0.0-beta.84 requires.
+- Alchemy 2.0.0-beta.84 moves its providers into separate packages. Import Cloudflare from
+  `@alchemy.run/cloudflare` (was `alchemy/Cloudflare`) and GitHub from `@alchemy.run/github` (was
+  `alchemy/GitHub`), and install them at `2.0.0-beta.84`. `Cloudflare.providers()` and
+  `Cloudflare.state()` keep their names.
+- `state: Convex.state({ team })` does not change. The stack still takes the state layer, and
+  `alchemy state` without `--backend` reads it from the stack file. `STORE_VERSION` stays 3, so the
+  first run does not push the store.
+- Development dependencies: `alchemy` 2.0.0-beta.84, `effect`, `@effect/platform-node`, and
+  `@effect/vitest` 4.0.5, and the new `@alchemy.run/cloudflare` 2.0.0-beta.84 for
+  `examples/app`. `pnpm-workspace.yaml` excludes these exact beta versions, and the
+  `@alchemy.run/*` and `@distilled.cloud/*` versions that they install, from `minimumReleaseAge`.
+
 ## 0.10.0 (unreleased)
 
 - `bindComponent` connects the installed name of a Convex component, as in the app's

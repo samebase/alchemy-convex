@@ -12,18 +12,21 @@ This is a community provider, maintained by [Samebase](https://samebase.com). Th
 follows the "Convex Plain" mode of [rjdellecese/confect#408](https://github.com/rjdellecese/confect/issues/408).
 [docs/design/convex-plane.md](docs/design/convex-plane.md) records the decisions.
 
-Status: pinned to `alchemy@2.0.0-beta.83` and Effect 4. Alchemy ships breaking changes between
+Status: pinned to `alchemy@2.0.0-beta.84` and Effect 4. Alchemy ships breaking changes between
 betas; upgrade this package and Alchemy together. A live test runs the full sequence with the real
 Convex CLI: create, push, no-op, change, preview, deploy keys alone, and destroy.
 
 ## Install
 
 ```sh
-pnpm add -D @samebase/alchemy-convex alchemy@2.0.0-beta.83 effect@^4.0.0 @effect/platform-node@^4.0.0 convex
+pnpm add -D @samebase/alchemy-convex alchemy@2.0.0-beta.84 effect@^4.0.5 @effect/platform-node@^4.0.5 convex
 ```
 
 Use one version for `effect` and for each `@effect/*` package. A mix fails at load time, such as
 `@effect/platform-node-shared` 4.0.5 next to `effect` 4.0.3.
+
+Alchemy providers are separate packages. The example below also needs
+`@alchemy.run/cloudflare@2.0.0-beta.84`, the same version as `alchemy`.
 
 ## Example
 
@@ -60,7 +63,7 @@ export default Alchemy.Stack(
 );
 ```
 
-The imports are `alchemy`, `alchemy/Cloudflare`, `alchemy/RemovalPolicy`, `effect/Config`,
+The imports are `alchemy`, `@alchemy.run/cloudflare`, `alchemy/RemovalPolicy`, `effect/Config`,
 `effect/Effect`, `effect/Layer`, and `@samebase/alchemy-convex` as `Convex`. Order follows the
 outputs: the project exists before its deployment, and the push finishes before the site build. The
 first `alchemy deploy --stage prod` takes over the existing project, and its production

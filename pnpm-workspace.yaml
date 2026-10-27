@@ -3,9 +3,23 @@ allowBuilds:
   workerd: false
 # 7 days, the same rule as renovate.json. pnpm 11 checks every lockfile entry against it.
 minimumReleaseAge: 10080
-# Native JWT signing is required for the store's scoped subscriptions.
 minimumReleaseAgeExclude:
+  # Native JWT signing is required for the store's scoped subscriptions.
   - convex@1.48.0
+  # Alchemy 2.0.0-beta.84, which this release targets, and the packages of its provider split
+  # that alchemy and @alchemy.run/cloudflare (examples/app) install.
+  - alchemy@2.0.0-beta.84
+  - "@alchemy.run/acme@2.0.0-beta.84"
+  - "@alchemy.run/cloudflare@2.0.0-beta.84"
+  - "@alchemy.run/cloudflare-runtime@2.0.0-beta.84"
+  - "@alchemy.run/docker@2.0.0-beta.84"
+  - "@alchemy.run/node-utils@2.0.0-beta.84"
+  - "@alchemy.run/sql@2.0.0-beta.84"
+  - "@distilled.cloud/acme@1.0.0-rc.17"
+  - "@distilled.cloud/aws4signer@1.0.0-rc.17"
+  - "@distilled.cloud/cloudflare@1.0.0-rc.17"
+  - "@distilled.cloud/core@1.0.0-rc.17"
+  - "@distilled.cloud/iceberg@1.0.0-rc.17"
 # One Vite and one Vitest for `vp test` and for the packages that import them directly
 # (@effect/vitest, alchemy/Test/Vitest). Keep these at the versions that vite-plus bundles.
 overrides:
