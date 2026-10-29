@@ -188,13 +188,31 @@ an issued token remains valid until the backend rejects its expiry, including it
 reads at expiry plus six seconds, and the open subscription stopped at expiry plus one second.
 The trusted server must not treat its deployment credential as a browser credential.
 
+## The project is named samebase (0.13.0)
+
+The project that `Convex.state({ team })` finds or creates is named `samebase` (was
+`alchemy-state`). Reason: the project becomes the team's base, the deployment that holds the state
+component next to the identity broker and the other team-level components, and a team's dashboard
+should say what it is. `samebase` is the product's name, so no team has a project of that name for
+another purpose; our own team renamed its app project to `samebase-com` first.
+
+A team that has an `alchemy-state` project renames it before the first run of 0.13.0:
+`PATCH /projects/{project_id}` with `name: "samebase"` (and `slug: "samebase"` when the slug is free),
+through the Management API or the dashboard. The provider finds the project by name only; a run that
+finds no project named `samebase` creates an empty one, and a run of an older version of this package
+that finds no `alchemy-state` creates an empty one of that name. So the rename and the upgrade of
+every consumer of the team happen together.
+
+The package exports the state component for an app that mounts it next to other components:
+`import alchemyState from "@samebase/alchemy-convex/state/convex.config"`.
+
 ## The store is a component (store version 4)
 
 Store version 4 puts the tables and the data functions of the store into the Convex component
 `alchemyState`. The provider and the readers call the same functions as before.
 
 Why: a team project will mount this component next to other components. A component has its own
-tables and functions, so it can go into an app that has other tables. The project `alchemy-state`
+tables and functions, so it can go into an app that has other tables. The project `samebase`
 that the provider creates stays as it is: an app that has only the store.
 
 What moved to `src/store/component/`, with `defineComponent("alchemyState")`, its own schema, and
@@ -237,7 +255,7 @@ them once. Every consumer pins the version of this package, so no run pushes sto
 the team upgrades a consumer: the move comes before the first upgrade, and no deploy has to stop.
 
 1. Export the store deployment before the push: with the Convex CLI login, in a directory that
-   selects the `alchemy-state` project, `npx convex export --prod --path snapshot.zip`, and extract
+   selects the `samebase` project, `npx convex export --prod --path snapshot.zip`, and extract
    the file. The snapshot holds every secret of the state: keep it for minutes, with permissions
    for the operator only, and delete it after step 5.
 2. Run `alchemy plan` once for a stack that has no resources, on store version 4: a scratch stack

@@ -7,7 +7,7 @@ import { storeTest } from "./storeTest.ts";
 const main = { stack: "samebase/app", stage: "main" };
 const preview = { stack: "samebase/app", stage: "pr-1" };
 
-describe("alchemy-state", () => {
+describe("the state store", () => {
   it("answers its wire version", async () => {
     const t = storeTest();
     expect(await t.query(internal.state.version, {})).toBe(STORE_VERSION);

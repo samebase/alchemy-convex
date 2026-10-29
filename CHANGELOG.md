@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.13.0 (unreleased)
+
+The state project of a team is named `samebase`.
+
+- Breaking: `Convex.state({ team })` finds or creates the project `samebase` (was `alchemy-state`).
+  A team renames its existing project before the first run of this version, with the Management
+  API (`PATCH /projects/{project_id}`, name and slug) or the dashboard, and upgrades every consumer
+  at the same time: a run of either version that does not find its project creates an empty one.
+  The rows do not move.
+- The package exports the state component as `@samebase/alchemy-convex/state/convex.config`, for
+  an app that mounts it next to other components. The functions of the store app stay in this
+  package; a mounting app writes its own wrappers.
+
 ## 0.12.0 (unreleased)
 
 The state store is a Convex component: store version 4. The store functions, their arguments, and

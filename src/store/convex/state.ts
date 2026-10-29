@@ -1,4 +1,4 @@
-// The state functions of the alchemy-state project: one project for each
+// The state functions of the samebase project of a team: one project for each
 // Convex team, pushed by Convex.state() from this directory. These raw state
 // functions are internal. reader.ts exposes authenticated, redacted reads.
 //
