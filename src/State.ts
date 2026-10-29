@@ -3,7 +3,8 @@
 // One project for each Convex team, `alchemy-state`, holds the state of
 // every stack and stage of the team in its production deployment: the
 // tables `resources (stack, stage, fqn, value)` and `outputs (stack, stage,
-// value)`, served by the functions of src/store/convex. The store lives
+// value)` of the alchemyState component (src/store/component), served by the
+// functions of src/store/convex. The store lives
 // outside every resource that a stack manages, so a stack can create and
 // destroy its own project. See docs/design/convex-state.md.
 //
@@ -244,7 +245,8 @@ const storeVersion = (api: FunctionApi) =>
  * The functions directory of the store app, `src/store/convex` of this
  * package. This file is `src/State.ts` in a checkout and a chunk in `lib/`
  * in the installed package, which ships `src` too, so the directory is
- * `../src/store/convex` from either place.
+ * `../src/store/convex` from either place. Its `convex.config.ts` mounts the
+ * alchemyState component of `src/store/component`, inside the same push root.
  */
 export const storeDirectory = () =>
   join(dirname(fileURLToPath(import.meta.url)), "..", "src", "store", "convex");

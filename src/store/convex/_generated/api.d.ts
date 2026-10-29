@@ -9,7 +9,6 @@
  */
 
 import type * as reader from "../reader.js";
-import type * as runRecord from "../runRecord.js";
 import type * as state from "../state.js";
 import type * as version from "../version.js";
 
@@ -21,7 +20,6 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   reader: typeof reader;
-  runRecord: typeof runRecord;
   state: typeof state;
   version: typeof version;
 }>;
@@ -52,4 +50,6 @@ export declare const internal: FilterApi<
   FunctionReference<any, "internal">
 >;
 
-export declare const components: {};
+export declare const components: {
+  alchemyState: import("../../component/_generated/component.js").ComponentApi<"alchemyState">;
+};

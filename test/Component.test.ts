@@ -1,11 +1,9 @@
-/// <reference types="vite-plus/client" />
 import assert from "node:assert/strict";
 import { Resource } from "alchemy";
 import * as Namespace from "alchemy/Namespace";
 import * as Provider from "alchemy/Provider";
 import * as State from "alchemy/State";
 import * as Test from "alchemy/Test/Vitest";
-import { convexTest } from "convex-test";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -13,10 +11,9 @@ import * as Redacted from "effect/Redacted";
 import { expect } from "vitest";
 import * as Convex from "../src/index.ts";
 import { api, internal } from "../src/store/convex/_generated/api.js";
-import schema from "../src/store/convex/schema.ts";
 import { FakeConvex } from "./fakeConvex.ts";
+import { storeTest } from "./storeTest.ts";
 
-const modules = import.meta.glob("../src/store/convex/**/*.ts");
 type Consumer = Resource<"Test.UrlConsumer", { url: string }, { url: string; revision: number }>;
 const Consumer = Resource<Consumer>("Test.UrlConsumer");
 const { test } = Test.make({
@@ -88,7 +85,7 @@ test.provider("changes component bindings without replacing resources or pushing
 
     // Feed the real Alchemy state row through the store used by live subscribers.
     yield* Effect.promise(async () => {
-      const t = convexTest(schema, modules);
+      const t = storeTest();
       await t.mutation(internal.state.set, {
         stack: "samebase/mail",
         stage: "prod",
