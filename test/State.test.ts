@@ -55,10 +55,7 @@ beforeEach(() => {
   store = join(app, "convex");
   mkdirSync(store, { recursive: true });
   mkdirSync(join(app, "node_modules", "convex"), { recursive: true });
-  writeFileSync(
-    join(app, "package.json"),
-    JSON.stringify({ name: "alchemy-state", private: true }),
-  );
+  writeFileSync(join(app, "package.json"), JSON.stringify({ name: "samebase", private: true }));
   writeFileSync(
     join(app, "node_modules", "convex", "package.json"),
     JSON.stringify({ name: "convex", bin: { convex: FAKE_CLI } }),
@@ -158,7 +155,7 @@ describe("Convex.state", () => {
 
     const [runKey, pushKey, pushKeyDelete] = keyCalls(fake);
     expect(Schema.decodeUnknownSync(KeyBody)(runKey?.body)).toEqual({
-      name: "alchemy-state",
+      name: "samebase",
       allowedActions: [...RUN_KEY_ACTIONS],
     });
     expect(Schema.decodeUnknownSync(KeyBody)(pushKey?.body).allowedActions).toEqual([

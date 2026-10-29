@@ -1,6 +1,6 @@
 // Alchemy state in Convex: `state: Convex.state({ team })` in `Alchemy.Stack`.
 //
-// One project for each Convex team, `alchemy-state`, holds the state of
+// One project for each Convex team, `samebase`, holds the state of
 // every stack and stage of the team in its production deployment: the
 // tables `resources (stack, stage, fqn, value)` and `outputs (stack, stage,
 // value)` of the alchemyState component (src/store/component), served by the
@@ -19,7 +19,7 @@
 // repository-scoped subscriptions with secret values removed. A key that stops working during a
 // long run (it expires after two hours) is replaced once per call.
 //
-// Two first runs of a team can both create a project named `alchemy-state`.
+// Two first runs of a team can both create a project named `samebase`.
 // The run whose project is not the oldest deletes its own, before it writes
 // anything, and uses the oldest: both runs end on one store.
 //
@@ -80,7 +80,7 @@ import { type RunRecord, runRecord, withRunRecord } from "./RunRecord.ts";
 import { STORE_VERSION } from "./store/convex/version.ts";
 
 /** The name of the state project in each team. */
-export const STORE_PROJECT_NAME = "alchemy-state";
+export const STORE_PROJECT_NAME = "samebase";
 
 /**
  * The actions of the key of one run: the internal queries and mutations of
@@ -252,7 +252,7 @@ export const storeDirectory = () =>
   join(dirname(fileURLToPath(import.meta.url)), "..", "src", "store", "convex");
 
 export interface StoreOptions {
-  /** Team slug or numeric team id of the `alchemy-state` project, or undefined with a team access token, which names its team. */
+  /** Team slug or numeric team id of the `samebase` project, or undefined with a team access token, which names its team. */
   readonly team: string | number | undefined;
   readonly api: ManagementApiService;
   readonly spawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
@@ -329,7 +329,7 @@ const createStoreProject = (api: ManagementApiService, teamId: number, team: str
   });
 
 /**
- * The StateService over the `alchemy-state` project of the team: found or
+ * The StateService over the `samebase` project of the team: found or
  * created, its store pushed when it is missing or older, and read and
  * written with the keys of this run.
  */
@@ -357,7 +357,7 @@ export const makeConvexState = (options: StoreOptions) =>
         }),
       ),
     );
-    const mint = createDeployKey(api, deployment.name, "alchemy-state", RUN_KEY_ACTIONS).pipe(
+    const mint = createDeployKey(api, deployment.name, STORE_PROJECT_NAME, RUN_KEY_ACTIONS).pipe(
       Effect.map((key) => {
         keys.push(key);
         return makeFunctionApi(deployment.deploymentUrl, key);
@@ -441,7 +441,7 @@ export const makeConvexState = (options: StoreOptions) =>
   });
 
 /**
- * Alchemy state in the `alchemy-state` project of `team`, with the team token
+ * Alchemy state in the `samebase` project of `team`, with the team token
  * in CONVEX_ACCESS_TOKEN or the Convex CLI login. A team access token names
  * its team, so `team` is optional with one; the Convex CLI login needs the
  * slug or the id. The first use of the run finds or creates the project and
