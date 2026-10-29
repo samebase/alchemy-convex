@@ -13,6 +13,18 @@ describe("alchemy-state", () => {
     expect(await t.query(internal.state.version, {})).toBe(STORE_VERSION);
   });
 
+  it("does not read a row of store version 3, which sits in a root table", async () => {
+    const t = storeTest();
+    await t.run(async (ctx) => {
+      await ctx.db.insert("resources", { ...main, fqn: "Project", value: "{}" });
+      await ctx.db.insert("outputs", { ...main, value: '{"url":"u"}' });
+    });
+    expect(await t.query(internal.state.stacks, {})).toEqual([]);
+    expect(await t.query(internal.state.getOutput, main)).toBeNull();
+    await t.mutation(internal.state.set, { ...main, fqn: "Project", value: "{}" });
+    expect(await t.query(internal.state.stacks, {})).toEqual(["samebase/app"]);
+  });
+
   it("lists stacks and stages in index order, one row for each resource", async () => {
     const t = storeTest();
     await t.mutation(internal.state.set, { ...preview, fqn: "B", value: "{}" });

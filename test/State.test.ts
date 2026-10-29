@@ -330,7 +330,10 @@ describe("Convex.state", () => {
     }
   });
 
-  it("upgrades a 0.6.1 store in place: the old names answer the same rows, and readStack is new", async () => {
+  // The fake's push raises the version and keeps the rows. A real push of store version 4 leaves
+  // the rows of an older store in the root tables, which test/store.test.ts shows, and the
+  // operator moves them once (docs/design/convex-state.md).
+  it("upgrades an older store in place: the old names answer, and readStack is new", async () => {
     const fake = new FakeConvex().install();
     const deployment =
       fake.project(fake.addProject({ name: STORE_PROJECT_NAME, teamId: TEAM }))
