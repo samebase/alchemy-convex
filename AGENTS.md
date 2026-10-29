@@ -8,8 +8,9 @@
 - This package manages only the Convex plane: projects, deployments, their environment variables,
   and the push of the functions inside `Convex.Deployment`. See `docs/design/convex-plane.md`.
 - `Convex.state({ team })` keeps Alchemy state in the `alchemy-state` project of the team, with the
-  functions of `src/store/convex/`, which the store pushes itself. Convex codegen writes
-  `src/store/convex/_generated/`. The store and its readers (Samebase) are released and upgraded
+  functions of `src/store/convex/` and the `alchemyState` component of `src/store/component/`,
+  which the store pushes itself. Convex codegen writes `src/store/convex/_generated/` and
+  `src/store/component/_generated/`. The store and its readers (Samebase) are released and upgraded
   together; a renamed function is a version bump on both sides. See `docs/design/convex-state.md`.
 - The Convex CLI owns typecheck, codegen, bundling, and the code push. `Convex.Deployment` only runs
   the installed `convex deploy`. Do not move work of the Convex CLI into this package.

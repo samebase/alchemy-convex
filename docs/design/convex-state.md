@@ -188,6 +188,68 @@ an issued token remains valid until the backend rejects its expiry, including it
 reads at expiry plus six seconds, and the open subscription stopped at expiry plus one second.
 The trusted server must not treat its deployment credential as a browser credential.
 
+## The store is a component (store version 4)
+
+Store version 4 puts the tables and the data functions of the store into the Convex component
+`alchemyState`. The provider and the readers call the same functions as before.
+
+Why: a team project will mount this component next to other components. A component has its own
+tables and functions, so it can go into an app that has other tables. The project `alchemy-state`
+that the provider creates stays as it is: an app that has only the store.
+
+What moved to `src/store/component/`, with `defineComponent("alchemyState")`, its own schema, and
+its own `_generated`:
+
+- The tables `resources` and `outputs` and the `runRecord` validator (`schema.ts`, `runRecord.ts`).
+- The data functions `stacks`, `stages`, `list`, `get`, `replaced`, `set`, `remove`, `removeStack`,
+  `getOutput`, `setOutput`, and `readStack` (`state.ts`), as component queries and mutations. They
+  have the same semantics, the same order, and `value` as JSON text.
+- The redacted read of one repository (`reader.ts`, `repository({ repository })`): the range reads,
+  the removal of secrets, and the `deployedHeadCommit` check.
+
+What stays in the store app `src/store/convex/`, and why:
+
+- `convex.config.ts`: `defineApp()` and `app.use(alchemyState)`.
+- `state.ts`: each `state:*` function is an internal query or mutation with the same name,
+  arguments, and result, and it calls the component function with the same name. The provider and
+  Samebase call these names with a deploy key. A component argument is required: an absent `run`
+  or `stage` goes to the component as `null`, because the generated component API types an
+  optional field without `undefined`.
+- `state:version` answers `STORE_VERSION` and does not call the component. The number counts the
+  functions of the app and of the component, `reader.ts` included, so the app keeps it.
+- `reader.ts`: `authorize` signs the token with `ctx.auth.signJwt`, and `repository` verifies it
+  with `ctx.auth.getUserIdentity`. A component has no `ctx.auth`. `repository` gives the verified
+  repository to the component read. The component read runs in the transaction of the app query,
+  so the subscription stays reactive.
+- `auth.config.ts` and `version.ts`.
+
+The wire contract does not change: the function names, the arguments, the results, and the JSON
+text of `value`. The recorded payloads in `test/fixtures/state/` stay as they are. The push does
+not change: `convex deploy --typecheck disable --codegen disable` from `src/store`, with the
+committed `_generated` of the app and of the component. The component directory is in that push
+root.
+
+The rows move. Convex keeps the tables of a component apart from the tables of the app. After the
+push of store version 4, the rows of store version 3 stay in the root tables `resources` and
+`outputs`, and no function reads them. The push does not move rows, and this package has no
+migration. A run that finds no rows plans each resource as new. A team whose store has rows moves
+them once:
+
+1. Stop the deploys of the stacks of the team.
+2. Run `alchemy plan` for one stack with store version 4. The run pushes the store. The plan shows
+   each resource as new. Do not deploy it.
+3. With the Convex CLI login, in a directory that selects the `alchemy-state` project, export the
+   store deployment (`npx convex export --prod --path snapshot.zip`) and extract the file. Then
+   import each root table into the component:
+   `npx convex import --prod --component alchemyState --table resources --append resources/documents.jsonl`,
+   and the same for `outputs`.
+4. Run `alchemy plan` again. It must show no change. Then start the deploys again.
+
+The rows of store version 3 stay in the root tables after the import. No function reads them.
+
+This version does not export the component from the package. A later version exports it, so that
+other apps can mount it.
+
 ## Measured
 
 Proof: the public starter `samebase/base-alchemy` on a local branch, with the stack named
@@ -224,6 +286,21 @@ touched.
 | One call reads the stack              | `state:readStack`: both stages in order, `pr-1` with `Backend` and `prod` with `Project`, each with its output document.                                                                                                                                                                              |
 | The read key cannot write             | `state:set` with the read key: `You do not have permission to perform this operation (deployment:functions:runInternalMutations)`.                                                                                                                                                                    |
 | Cleanup                               | `destroy --stage pr-1` deleted the preview deployment (0.8 s); `destroy --stage prod` deleted the project (0.5 s). After it: `stacks` without the scratch stack, `readStack` `{ stages: [] }`, no project named `tmp-d524`, `list_deploy_keys` of the store `[]`.                                     |
+
+### Measured for store version 4 (0.12.0)
+
+Proof on 2026-10-30 in team `nicu` on the development deployment `gallant-skunk-112` of
+`alchemy-state`, with the Convex CLI login and `convex` 1.48.0. The production deployment of the
+store was not touched. The probe rows were deleted at the end.
+
+| Check                       | Result                                                                                                                                                                                                                                                       |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| The push of the provider    | From store version 3, the push of `pushStore` (a key with `PUSH_KEY_ACTIONS` only, `convex deploy --typecheck disable --codegen disable` in `src/store`) installed the component. The committed `_generated` files did not change.                           |
+| The wire contract           | `state:version` answered 4. `state:set` and `state:setOutput` with a run record, then `state:readStack`, answered as store version 3 does. `reader:repository` with an `alchemy:read` identity removed the `__redacted__` value; without one it refused.     |
+| The installed package       | The same push from `node_modules/@samebase/alchemy-convex/src/store` of the packed tarball, installed with npm next to `convex` 1.48.0, passed.                                                                                                              |
+| The subscription            | A `ConvexClient` with a token of `reader:authorize` subscribed to `reader:repository`. A `state:set` through the component gave the subscription a new reply with the resource.                                                                              |
+| The rows of store version 3 | A row that store version 3 wrote stayed in the root table `resources`, and `state:stacks` answered `[]`. After the import of the root tables into the component (step 3 above), `state:stacks` and `state:readStack` answered the row again, with its `_id`. |
+| Not measured                | The production store of a team, and the move of its rows.                                                                                                                                                                                                    |
 
 ## Limits
 
