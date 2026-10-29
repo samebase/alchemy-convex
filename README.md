@@ -190,7 +190,8 @@ production deployment with the Convex CLI of the app; a later version of this pa
 newer store when it finds an older one. A store that is newer than the package fails the run with
 both versions, so the repositories of a team upgrade the package together. Each run makes a
 deploy key of that deployment that can only run the store's internal functions, and deletes it at
-the end. Rows are in the tables `resources` and `outputs` in the dashboard, under the stack name.
+the end. Rows are in the tables `resources` and `outputs` of the component `alchemyState` in the
+dashboard, under the stack name.
 The store has no lock: run one deploy of a stage at a time, such as with a CI concurrency group.
 The store and its readers (Samebase) are released and upgraded together.
 

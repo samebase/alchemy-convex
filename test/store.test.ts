@@ -1,23 +1,32 @@
-// The store functions of src/store/convex in convex-test.
-/// <reference types="vite-plus/client" />
-import { convexTest } from "convex-test";
+// The store functions of src/store/convex and its alchemyState component in convex-test.
 import { describe, expect, it } from "vitest";
 import { internal } from "../src/store/convex/_generated/api.js";
-import schema from "../src/store/convex/schema.ts";
 import { STORE_VERSION } from "../src/store/convex/version.ts";
+import { storeTest } from "./storeTest.ts";
 
-const modules = import.meta.glob("../src/store/convex/**/*.ts");
 const main = { stack: "samebase/app", stage: "main" };
 const preview = { stack: "samebase/app", stage: "pr-1" };
 
 describe("alchemy-state", () => {
   it("answers its wire version", async () => {
-    const t = convexTest(schema, modules);
+    const t = storeTest();
     expect(await t.query(internal.state.version, {})).toBe(STORE_VERSION);
   });
 
+  it("does not read a row of store version 3, which sits in a root table", async () => {
+    const t = storeTest();
+    await t.run(async (ctx) => {
+      await ctx.db.insert("resources", { ...main, fqn: "Project", value: "{}" });
+      await ctx.db.insert("outputs", { ...main, value: '{"url":"u"}' });
+    });
+    expect(await t.query(internal.state.stacks, {})).toEqual([]);
+    expect(await t.query(internal.state.getOutput, main)).toBeNull();
+    await t.mutation(internal.state.set, { ...main, fqn: "Project", value: "{}" });
+    expect(await t.query(internal.state.stacks, {})).toEqual(["samebase/app"]);
+  });
+
   it("lists stacks and stages in index order, one row for each resource", async () => {
-    const t = convexTest(schema, modules);
+    const t = storeTest();
     await t.mutation(internal.state.set, { ...preview, fqn: "B", value: "{}" });
     await t.mutation(internal.state.set, { ...main, fqn: "B", value: "{}" });
     await t.mutation(internal.state.set, { ...main, fqn: "A", value: "{}" });
@@ -40,7 +49,7 @@ describe("alchemy-state", () => {
   });
 
   it("lists a stage and its stack from an output alone", async () => {
-    const t = convexTest(schema, modules);
+    const t = storeTest();
     await t.mutation(internal.state.setOutput, {
       stack: "samebase/empty",
       stage: "main",
@@ -59,7 +68,7 @@ describe("alchemy-state", () => {
   });
 
   it("returns only the rows with status replaced", async () => {
-    const t = convexTest(schema, modules);
+    const t = storeTest();
     await t.mutation(internal.state.set, { ...main, fqn: "A", value: '{"status":"replaced"}' });
     await t.mutation(internal.state.set, { ...main, fqn: "B", value: '{"status":"created"}' });
     await t.mutation(internal.state.set, { ...main, fqn: "C", value: '"replaced"' });
@@ -67,7 +76,7 @@ describe("alchemy-state", () => {
   });
 
   it("removes a row, a stage with its output, or a whole stack", async () => {
-    const t = convexTest(schema, modules);
+    const t = storeTest();
     await t.mutation(internal.state.set, { ...main, fqn: "A", value: "{}" });
     await t.mutation(internal.state.set, { ...main, fqn: "B", value: "{}" });
     await t.mutation(internal.state.set, { ...preview, fqn: "A", value: "{}" });
@@ -88,7 +97,7 @@ describe("alchemy-state", () => {
   });
 
   it("reads every stage of a stack in one call, in stage and fqn order", async () => {
-    const t = convexTest(schema, modules);
+    const t = storeTest();
     expect(await t.query(internal.state.readStack, { stack: "samebase/app" })).toEqual({
       stages: [],
     });

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.12.0 (unreleased)
+
+The state store is a Convex component: store version 4. The store functions, their arguments, and
+their results do not change.
+
+- Breaking: the next provider run pushes store version 4. The rows are now in the tables of the
+  component `alchemyState`. The rows of store version 3 stay in the root tables, and the store does
+  not read them, so a run that comes after the push and before the move plans each resource as
+  new. A team whose store has rows moves them once, with the steps in
+  [the design note](docs/design/convex-state.md#the-store-is-a-component-store-version-4).
+- The store app `src/store/convex` mounts the component of `src/store/component` and sends each
+  `state:*` function to it. `reader:authorize` and `reader:repository` stay in the app, because
+  they use `ctx.auth`. The package does not export the component yet.
+- The dashboard shows the rows under the component `alchemyState`.
+
 ## 0.11.0 (unreleased)
 
 Works with Alchemy 2.0.0-beta.84. The code, the resources, the state store, and its data do not

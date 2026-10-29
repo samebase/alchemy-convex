@@ -1,6 +1,10 @@
-import { v, type Infer } from "convex/values";
+// Authenticated reads stay in the app: `authorize` signs and `repository`
+// verifies with `ctx.auth`, which a component does not have. The rows and the
+// redaction are in the alchemyState component.
+import { v } from "convex/values";
+import { repositoryReply } from "../component/reader.ts";
+import { components } from "./_generated/api.js";
 import { env, internalMutation, query } from "./_generated/server.js";
-import { runRecord, validate } from "./runRecord.ts";
 
 const repositoryName = /^[^/]+\/[^/]+$/;
 
@@ -26,30 +30,10 @@ export const authorize = internalMutation({
   },
 });
 
-const stage = v.object({
-  name: v.string(),
-  record: runRecord,
-  deployedHeadCommit: v.union(v.string(), v.null()),
-  resources: v.array(v.object({ fqn: v.string(), value: v.string() })),
-  output: v.string(),
-});
-
-/** Alchemy encodes a secret as an object with __redacted__; discard that whole object's contents. */
-function withoutSecrets(text: string): unknown {
-  return JSON.parse(text, (_key, value: unknown) =>
-    typeof value === "object" && value !== null && "__redacted__" in value
-      ? { __redacted__: null }
-      : value,
-  );
-}
-
 /** A native subscription reads only the repository named in its verified capability. */
 export const repository = query({
   args: {},
-  returns: v.object({
-    store: v.literal("found"),
-    stacks: v.array(v.object({ name: v.string(), stages: v.array(stage) })),
-  }),
+  returns: repositoryReply,
   handler: async (ctx) => {
     const identity = await ctx.auth.getUserIdentity();
     if (
@@ -60,72 +44,8 @@ export const repository = query({
     ) {
       throw new Error("Alchemy repository read access is required.");
     }
-    const name = identity.repository;
-    // The exact name and its slash-prefixed children exclude names such as owner/app-other.
-    // All four reads share the query transaction, including writes made while provisioning.
-    const [rootResources, childResources, rootOutputs, childOutputs] = await Promise.all([
-      ctx.db
-        .query("resources")
-        .withIndex("by_fqn", (q) => q.eq("stack", name))
-        .collect(),
-      ctx.db
-        .query("resources")
-        .withIndex("by_fqn", (q) => q.gte("stack", `${name}/`).lt("stack", `${name}0`))
-        .collect(),
-      ctx.db
-        .query("outputs")
-        .withIndex("by_stage", (q) => q.eq("stack", name))
-        .collect(),
-      ctx.db
-        .query("outputs")
-        .withIndex("by_stage", (q) => q.gte("stack", `${name}/`).lt("stack", `${name}0`))
-        .collect(),
-    ]);
-    const stacks = new Map<string, Map<string, Infer<typeof stage>>>();
-    for (const row of [...rootOutputs, ...childOutputs]) {
-      const record = row.currentRun;
-      if (record === undefined || record.repository !== name) continue;
-      // The output keeps the record of the last completed deploy under `samebase.run`.
-      let output = row.value === undefined ? null : withoutSecrets(row.value);
-      let deployed: unknown = null;
-      if (typeof output === "object" && output !== null && "samebase.run" in output) {
-        ({ "samebase.run": deployed, ...output } = output);
-      }
-      let stages = stacks.get(row.stack);
-      if (stages === undefined) {
-        stages = new Map();
-        stacks.set(row.stack, stages);
-      }
-      stages.set(row.stage, {
-        name: row.stage,
-        record,
-        deployedHeadCommit:
-          validate(runRecord, deployed) && deployed.repository === name
-            ? deployed.headCommit
-            : null,
-        resources: [],
-        output: JSON.stringify(output),
-      });
-    }
-    for (const row of [...rootResources, ...childResources]) {
-      stacks
-        .get(row.stack)
-        ?.get(row.stage)
-        ?.resources.push({
-          fqn: row.fqn,
-          value: JSON.stringify(withoutSecrets(row.value)),
-        });
-    }
-    return {
-      store: "found" as const,
-      stacks: [...stacks]
-        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-        .map(([name, stages]) => ({
-          name,
-          stages: [...stages.values()].sort((a, b) =>
-            a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
-          ),
-        })),
-    };
+    return await ctx.runQuery(components.alchemyState.reader.repository, {
+      repository: identity.repository,
+    });
   },
 });

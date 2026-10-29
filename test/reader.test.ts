@@ -1,11 +1,8 @@
-/// <reference types="vite-plus/client" />
-import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
 import type { RunRecord } from "../src/RunRecord.ts";
 import { api, internal } from "../src/store/convex/_generated/api.js";
-import schema from "../src/store/convex/schema.ts";
+import { storeTest } from "./storeTest.ts";
 
-const modules = import.meta.glob("../src/store/convex/**/*.ts");
 const run: RunRecord = {
   version: 1,
   repository: "samebase/app",
@@ -21,7 +18,7 @@ const identity = { subject: "reader", scope: "alchemy:read", repository: run.rep
 
 describe("repository reader", () => {
   it("denies anonymous, malformed, and wrong-scope identities", async () => {
-    const t = convexTest(schema, modules);
+    const t = storeTest();
     await expect(t.query(api.reader.repository, {})).rejects.toThrow("read access");
     for (const claims of [
       { ...identity, scope: "other" },
@@ -36,7 +33,7 @@ describe("repository reader", () => {
   });
 
   it("includes exact and child stacks only, with deterministic order and no redacted content", async () => {
-    const t = convexTest(schema, modules);
+    const t = storeTest();
     for (const stack of [
       "samebase/app/z",
       "samebase/app-other",
@@ -98,7 +95,7 @@ describe("repository reader", () => {
   });
 
   it("shows the first write before output, and separates the current run from the deployed commit", async () => {
-    const t = convexTest(schema, modules);
+    const t = storeTest();
     const reader = t.withIdentity(identity);
     await t.mutation(internal.state.set, {
       stack: run.repository,
@@ -170,7 +167,7 @@ describe("repository reader", () => {
   });
 
   it("hides a stage after a write without a run record", async () => {
-    const t = convexTest(schema, modules);
+    const t = storeTest();
     const reader = t.withIdentity(identity);
     await t.mutation(internal.state.set, {
       stack: run.repository,
@@ -193,7 +190,7 @@ describe("repository reader", () => {
   });
 
   it("preserves arbitrary JSON output while removing nested secrets", async () => {
-    const t = convexTest(schema, modules);
+    const t = storeTest();
     for (const value of [null, "text", 1, false, [1, { __redacted__: "private" }]]) {
       await t.mutation(internal.state.setOutput, {
         stack: run.repository,
