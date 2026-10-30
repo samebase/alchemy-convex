@@ -201,8 +201,9 @@ hub, so that a team would have one project. That was reversed for three reasons,
 - The one-credential benefit does not need one project: the team token reaches every project of
   the team, and `Convex.HubClient` finds the hub by the name of its project.
 
-The hub stays in the project `samebase`. Renaming it while an older version of this package can run
-is unsafe: that version finds no project of that name and creates an empty store.
+The hub stayed in the project `samebase` at first, because a rename was unsafe while a version of this
+package that looks for its store under that name could run. Since 0.17.0 the hub is the project
+`identity-hub`, found by name. A team renames the project together with the upgrade of its stacks.
 
 ## The project was named samebase (0.13.0 to 0.15.0)
 

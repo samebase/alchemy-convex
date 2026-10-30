@@ -128,7 +128,7 @@ describe("Convex.HubClient", () => {
       new FakeConvex().install();
       const error = yield* Effect.flip(stack.deploy(client(props())));
       expect(error).toBeInstanceOf(Convex.HubClientFailed);
-      expect(error.message).toContain("no project samebase");
+      expect(error.message).toContain("no project identity-hub");
     }),
   );
 
