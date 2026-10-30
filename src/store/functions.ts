@@ -186,8 +186,11 @@ export const readerFunctions = (alchemyState: ComponentApi) => ({
     returns: repositoryReply,
     handler: async (ctx) => {
       const identity = await ctx.auth.getUserIdentity();
+      // Only a token of the deployment's own issuer reads, the one that `authorize` signs: a base
+      // can accept other providers too, and a token of one of those with the same claims does not.
       if (
         identity === null ||
+        identity.issuer !== env.CONVEX_CLOUD_URL ||
         identity.scope !== "alchemy:read" ||
         typeof identity.repository !== "string" ||
         !repositoryName.test(identity.repository)

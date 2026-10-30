@@ -8,7 +8,9 @@ version 5.
 
 - Breaking: store version 5. `state:version` answers `{ version, host }` (was a number). `host` is
   `"seed"` for the store app of this package and `"base"` for the base app of a team. The next
-  provider run of each team pushes store version 5 to its seed. The other functions, their
+  provider run of each team pushes store version 5 to its seed. From then on, a run on 0.13.0 or
+  older fails with `bad store version` until that consumer moves to this version: every consumer
+  of a team moves at once. The other functions, their
   arguments, their results, and the rows do not change.
 - The package exports the store functions as code, and its store app `src/store/convex` uses the
   same exports:

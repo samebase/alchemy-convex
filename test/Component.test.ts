@@ -14,6 +14,10 @@ import { api, internal } from "../src/store/convex/_generated/api.js";
 import { FakeConvex } from "./fakeConvex.ts";
 import { storeTest } from "./storeTest.ts";
 
+/** The deployment's own URL, the issuer of the reader's tokens; convex-test has none of its own. */
+const readerIssuer = "https://fake-deployment.convex.cloud";
+process.env["CONVEX_CLOUD_URL"] = readerIssuer;
+
 type Consumer = Resource<"Test.UrlConsumer", { url: string }, { url: string; revision: number }>;
 const Consumer = Resource<Consumer>("Test.UrlConsumer");
 const { test } = Test.make({
@@ -105,6 +109,7 @@ test.provider("changes component bindings without replacing resources or pushing
       });
       const result = await t
         .withIdentity({
+          issuer: readerIssuer,
           subject: "test-reader",
           scope: "alchemy:read",
           repository: "samebase/mail",

@@ -277,7 +277,7 @@ other apps can mount it.
 
 ## The store's functions are exported, and a base is never pushed over (store version 5)
 
-A base is the app of a team that holds the team-level components in the `samebase` project: the
+A base is the app of a team in the `samebase` project. It holds the team-level components: the
 hub, which mounts `@samebase/identity-broker`, and the `alchemyState` component of this package.
 The store app of this package, `src/store/convex`, is a seed: the provider pushes it to a project
 that has no base. A push replaces every function of a deployment. Thus a base serves the same
@@ -436,7 +436,11 @@ touched. The probe rows were deleted at the end, and the deployment is a seed ag
   store can push in the order new, then old, in the seconds between the second read of the version
   and the end of the push; the newer run then fails with both versions, and its next run pushes its
   store again. The upgrade happens once for each new package version in a team. A base app that is
-  pushed in the same seconds is replaced by the store app until the next push of the base app.
+  pushed in the same seconds is replaced by the store app, and the hub with it, until the next push
+  of the base app. So a team pushes its base for the first time when no stack of the team runs;
+  after that the provider never pushes, because the store answers `base`. The base repository pins
+  one version of this package for its stack and its app, so one bump of that pin upgrades the store
+  functions and the provider together.
 - A team access token (0.6.1): `GET /token_details` names its team, and the dashboard's team list
   answers it HTTP 403, so a slug is checked against the `teamSlug` of the team's projects instead;
   a team without a project needs the numeric id. Measured with a temporary team token on a

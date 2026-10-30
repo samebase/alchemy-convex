@@ -154,6 +154,8 @@ export class FakeConvex {
   readonly deploymentKeys = new Map<string, string>();
   /** The store of each deployment that has one: POST /api/function answers its functions. */
   readonly stores = new Map<string, Store>();
+  /** The push events of the fake CLI that this fake applied already, one install for each. */
+  private appliedPushes = new Set<string>();
   /** The store functions that ran, as "<deployment> <path>" lines. */
   readonly functionCalls: string[] = [];
   /** Every deploy key secret ever created for each deployment, also the deleted ones. */
@@ -471,12 +473,13 @@ export class FakeConvex {
     if (key === undefined) return json(403, stateFixture("function_no_key.json"));
     const { path, args } = Schema.decodeUnknownSync(FunctionCall)(body);
     const name = path.replace(/^state:/, "");
-    // A push of the fake CLI with a key of this deployment installs the
-    // store app, or replaces an older store with it and keeps the rows.
-    if (this.pushedByCli(deployment)) {
+    // Each push of the fake CLI with a key of this deployment installs the store app once: as a
+    // real push, it replaces whatever answered, a base too, and keeps the rows.
+    for (const push of this.newCliPushes(deployment)) {
+      this.appliedPushes.add(push);
       const pushed = this.stores.get(deployment);
       if (pushed === undefined) this.addStore(deployment, STORE_VERSION);
-      else if (pushed.version < STORE_VERSION) {
+      else {
         pushed.version = STORE_VERSION;
         pushed.host = "seed";
       }
@@ -594,15 +597,18 @@ export class FakeConvex {
   }
 
   /** True when the fake CLI log (fixtures/fake-convex-cli.ts) has a run with a key of `deployment`. */
-  private pushedByCli(deployment: string) {
+  /** The push events of the fake CLI with a key of this deployment that are not applied yet. */
+  private newCliPushes(deployment: string): string[] {
     const log = process.env["ALCHEMY_CONVEX_FAKE_CLI_LOG"];
-    if (log === undefined || !existsSync(log)) return false;
+    if (log === undefined || !existsSync(log)) return [];
     const hashes = new Set(this.keysOf(this.createdSecrets, deployment).map(sha256));
     return readFileSync(log, "utf8")
       .split("\n")
-      .filter((line) => line !== "")
-      .some((line) =>
-        hashes.has(Schema.decodeUnknownSync(Schema.fromJsonString(CliRun))(line).keySha256),
+      .filter(
+        (line) =>
+          line !== "" &&
+          !this.appliedPushes.has(line) &&
+          hashes.has(Schema.decodeUnknownSync(Schema.fromJsonString(CliRun))(line).keySha256),
       );
   }
 
