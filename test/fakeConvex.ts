@@ -55,14 +55,9 @@ export interface StoreRow {
   readonly value: string;
 }
 
-/** The store on one deployment: its version, the app that serves it, its rows, and outputs. */
+/** The store of src/store/convex on one deployment: its version, rows, and outputs. */
 export interface Store {
   version: number;
-  /**
-   * `seed`: the store app of src/store/convex. `base`: the base app of the team. Undefined for a
-   * store without `state:host`, from before 0.14.0.
-   */
-  host: "seed" | "base" | undefined;
   rows: StoreRow[];
   readonly outputs: Map<string, string>;
 }
@@ -86,7 +81,6 @@ export class Hub {
 /** The internal functions of the store that a query key runs, and those that need a mutation key. */
 const STORE_QUERIES = [
   "version",
-  "host",
   "stacks",
   "stages",
   "list",
@@ -173,8 +167,6 @@ export class FakeConvex {
   readonly deploymentKeys = new Map<string, string>();
   /** The store of each deployment that has one: POST /api/function answers its functions. */
   readonly stores = new Map<string, Store>();
-  /** The push events of the fake CLI that this fake applied already, one install for each. */
-  private appliedPushes = new Set<string>();
   /** The identity hub of each deployment that has one: POST /api/function answers its admin functions. */
   readonly hubs = new Map<string, Hub>();
   /** The store functions that ran, as "<deployment> <path>" lines. */
@@ -227,9 +219,9 @@ export class FakeConvex {
     return id;
   }
 
-  /** Gives a deployment the store at `version` that `host` serves, with no rows, and returns it. */
-  addStore(deployment: string, version: number, host?: Store["host"]) {
-    const store: Store = { version, host, rows: [], outputs: new Map() };
+  /** Gives a deployment the store at `version`, with no rows, and returns it. */
+  addStore(deployment: string, version: number) {
+    const store: Store = { version, rows: [], outputs: new Map() };
     this.stores.set(deployment, store);
     return store;
   }
@@ -509,16 +501,12 @@ export class FakeConvex {
       return json(200, { ...stateFixture("function_version.json"), value: hub.run(path, hubArgs) });
     }
     const name = path.replace(/^state:/, "");
-    // Each push of the fake CLI with a key of this deployment installs the store app once: as a
-    // real push, it replaces whatever answered, a base too, and keeps the rows.
-    for (const push of this.newCliPushes(deployment)) {
-      this.appliedPushes.add(push);
+    // A push of the fake CLI with a key of this deployment installs the
+    // store, or raises an older one to the current version with its rows.
+    if (this.pushedByCli(deployment)) {
       const pushed = this.stores.get(deployment);
-      if (pushed === undefined) this.addStore(deployment, STORE_VERSION, "seed");
-      else {
-        pushed.version = STORE_VERSION;
-        pushed.host = "seed";
-      }
+      if (pushed === undefined) this.addStore(deployment, STORE_VERSION);
+      else if (pushed.version < STORE_VERSION) pushed.version = STORE_VERSION;
     }
     const store = this.stores.get(deployment);
     const reply = (value: unknown) =>
@@ -528,8 +516,7 @@ export class FakeConvex {
     if (
       store === undefined ||
       !(STORE_QUERIES.includes(name) || STORE_MUTATIONS.includes(name)) ||
-      store.version < (STORE_FUNCTION_SINCE[name] ?? 1) ||
-      (name === "host" && store.host === undefined)
+      store.version < (STORE_FUNCTION_SINCE[name] ?? 1)
     ) {
       return error(
         `[Request ID: fake] Server Error\nCould not find function for '${path}'. Did you forget to run \`npx convex dev\`?\n`,
@@ -551,8 +538,6 @@ export class FakeConvex {
     switch (name) {
       case "version":
         return reply(store.version);
-      case "host":
-        return reply(store.host);
       case "stacks":
         return reply([...new Set(store.rows.map((row) => row.stack))].sort());
       case "stages":
@@ -630,18 +615,15 @@ export class FakeConvex {
   }
 
   /** True when the fake CLI log (fixtures/fake-convex-cli.ts) has a run with a key of `deployment`. */
-  /** The push events of the fake CLI with a key of this deployment that are not applied yet. */
-  private newCliPushes(deployment: string): string[] {
+  private pushedByCli(deployment: string) {
     const log = process.env["ALCHEMY_CONVEX_FAKE_CLI_LOG"];
-    if (log === undefined || !existsSync(log)) return [];
+    if (log === undefined || !existsSync(log)) return false;
     const hashes = new Set(this.keysOf(this.createdSecrets, deployment).map(sha256));
     return readFileSync(log, "utf8")
       .split("\n")
-      .filter(
-        (line) =>
-          line !== "" &&
-          !this.appliedPushes.has(line) &&
-          hashes.has(Schema.decodeUnknownSync(Schema.fromJsonString(CliRun))(line).keySha256),
+      .filter((line) => line !== "")
+      .some((line) =>
+        hashes.has(Schema.decodeUnknownSync(Schema.fromJsonString(CliRun))(line).keySha256),
       );
   }
 

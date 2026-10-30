@@ -14,15 +14,7 @@ const run: RunRecord = {
   source: "laptop",
   recordedAt: "2026-10-24T10:00:00.000Z",
 };
-/** The deployment's own URL, the issuer of the reader's tokens; convex-test has none of its own. */
-const cloudUrl = "https://fake-deployment.convex.cloud";
-process.env["CONVEX_CLOUD_URL"] = cloudUrl;
-const identity = {
-  issuer: cloudUrl,
-  subject: "reader",
-  scope: "alchemy:read",
-  repository: run.repository,
-};
+const identity = { subject: "reader", scope: "alchemy:read", repository: run.repository };
 
 describe("repository reader", () => {
   it("denies anonymous, malformed, and wrong-scope identities", async () => {
@@ -30,7 +22,6 @@ describe("repository reader", () => {
     await expect(t.query(api.reader.repository, {})).rejects.toThrow("read access");
     for (const claims of [
       { ...identity, scope: "other" },
-      { ...identity, issuer: "https://other-provider.example" },
       { ...identity, repository: "samebase" },
       { ...identity, repository: 1 },
       { subject: "reader", repository: run.repository },

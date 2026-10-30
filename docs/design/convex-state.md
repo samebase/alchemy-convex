@@ -188,7 +188,23 @@ an issued token remains valid until the backend rejects its expiry, including it
 reads at expiry plus six seconds, and the open subscription stopped at expiry plus one second.
 The trusted server must not treat its deployment credential as a browser credential.
 
-## The project is named samebase (0.13.0)
+## The store has its own project (0.16.0)
+
+The project is named `alchemy-state-store`, the exact name of the Cloudflare state store of Alchemy
+(`DEFAULT_STATE_STORE_NAME`). From 0.14.0 to 0.15.0 the store shared a deployment with the identity
+hub, so that a team would have one project. That was reversed for three reasons, all seen in use.
+
+- The two have opposite owners. The package pushes the store, and nobody edits it. A team forks and
+  edits the hub. Sharing needed a rule for which app serves the store, and an order for every change.
+- They fail together. A push replaces every function of a deployment, so a broken hub deploy would
+  stop the state reads of every stack of the team.
+- The one-credential benefit does not need one project: the team token reaches every project of
+  the team, and `Convex.HubClient` finds the hub by the name of its project.
+
+The hub stays in the project `samebase`. Renaming it while an older version of this package can run
+is unsafe: that version finds no project of that name and creates an empty store.
+
+## The project was named samebase (0.13.0 to 0.15.0)
 
 The project that `Convex.state({ team })` finds or creates is named `samebase` (was
 `alchemy-state`). Reason: the project becomes the team's base, the deployment that holds the state
@@ -275,96 +291,6 @@ the team upgrades a consumer: the move comes before the first upgrade, and no de
 This version does not export the component from the package. A later version exports it, so that
 other apps can mount it.
 
-## The store's functions are exported, and a base is never pushed over (0.14.0)
-
-A base is the app of a team in the `samebase` project. It holds the team-level components: the
-hub, which mounts `@samebase/identity-broker`, and the `alchemyState` component of this package.
-The store app of this package, `src/store/convex`, is a seed: the provider pushes it to a project
-that has no base. A push replaces every function of a deployment. Thus a base serves the same
-fifteen functions as the seed, with the same names and the same results, and the same auth
-config. The provider never pushes its store app over a base, because that push erases the hub.
-
-The base app does not copy the functions. The package exports them as code, and the store app of
-the package uses the same exports:
-
-- `@samebase/alchemy-convex/state/functions`:
-  - `stateFunctions(alchemyState, host)`: the thirteen internal functions `version`, `host`,
-    `stacks`, `stages`, `list`, `get`, `replaced`, `set`, `remove`, `removeStack`, `getOutput`, `setOutput`,
-    and `readStack`. `alchemyState` is `components.alchemyState` of the app, of the type
-    `ComponentApi`. `host` is `"seed"` or `"base"`. Each function has the arguments, the result
-    validator, and the semantics of store version 4. `host` is new.
-  - `readerFunctions(alchemyState)`: the internal mutation `authorize` and the public query
-    `repository`.
-- `@samebase/alchemy-convex/state/auth.config`: `authConfig(cloudUrl)`, the auth config that
-  verifies the read tokens of `reader:authorize`.
-- `@samebase/alchemy-convex/state/_generated/component.js`: the `ComponentApi` type. The Convex
-  codegen of an app that mounts the component imports it for `components.alchemyState`.
-
-The exported modules import other modules with `.js` specifiers. A base app typechecks them with
-its own Convex tsconfig, which does not set `allowImportingTsExtensions`.
-
-`state:version` answers a number, as before. `state:host` answers `"seed"` or `"base"`. A store
-without `state:host` was pushed before 0.14.0, and it is a seed. `Convex.state()` reads
-`state:version` on each run, and `state:host` only when the store is older. It does this:
-
-| The store                                    | The run                                                           |
-| -------------------------------------------- | ----------------------------------------------------------------- |
-| No function, and the deployment has no code  | Pushes the store app.                                             |
-| No function, and the deployment has code     | Fails: another app has the name of the store.                     |
-| A seed of an older version                   | Pushes the store app.                                             |
-| A base of an older version                   | Fails with `OutdatedBase`, which names the dependency to upgrade. |
-| The version of the package, from either host | Reads and writes.                                                 |
-| A newer version, from either host            | Fails with both versions, as before.                              |
-
-The run reads the store again right before a push, because another run can push a newer store, or
-the base app, in the meantime. The push has no lock (see Limits).
-
-`STORE_VERSION` is a wire contract, not a release number. Each consumer needs the exact number, so
-a raise moves every consumer of a team at once. So it rises only when a function that a released
-client calls changes its arguments, its result, or its meaning, or goes away. A new function does
-not raise it. 0.14.0 adds `state:host` and changes no function, so the number stays 4: a consumer on
-0.13.0 keeps working, also next to a base, and it moves when it wants to.
-
-The base app mounts the component without a name, so that its rows are the rows of the seed:
-`app.use(alchemyState)` in `convex.config.ts`, with
-`import alchemyState from "@samebase/alchemy-convex/state/convex.config"`. Then it writes three
-files. Each file names every export, so that the Convex analysis finds each function.
-
-```ts
-// convex/state.ts
-export const {
-  version,
-  host,
-  stacks,
-  stages,
-  list,
-  get,
-  replaced,
-  set,
-  remove,
-  removeStack,
-  getOutput,
-  setOutput,
-  readStack,
-} = stateFunctions(components.alchemyState, "base");
-// convex/reader.ts
-export const { authorize, repository } = readerFunctions(components.alchemyState);
-// convex/auth.config.ts
-export default authConfig(env.CONVEX_CLOUD_URL);
-```
-
-`stateFunctions` and `readerFunctions` come from `@samebase/alchemy-convex/state/functions`,
-`authConfig` from `@samebase/alchemy-convex/state/auth.config`, `components` from
-`./_generated/api`, and `env` from `./_generated/server`. A base app that has more auth providers
-puts the providers of `authConfig(env.CONVEX_CLOUD_URL)` into its own list.
-
-The store version of a base is the store version of the `@samebase/alchemy-convex` that the base
-app installs. When the number rises, the base app moves first and each consumer follows. A consumer
-of a team fails on a base that is older or newer than the consumer.
-
-The rows do not change, and 0.14.0 pushes nothing to a store of version 4. A base app that replaces a seed mounts the same component name, so the base serves
-the rows of the seed.
-
 ## Measured
 
 Proof: the public starter `samebase/base-alchemy` on a local branch, with the stack named
@@ -417,21 +343,6 @@ store was not touched. The probe rows were deleted at the end.
 | The rows of store version 3 | A row that store version 3 wrote stayed in the root table `resources`, and `state:stacks` answered `[]`. After the import of the root tables into the component (step 3 above), `state:stacks` and `state:readStack` answered the row again. The Convex import keeps `_id` and `_creationTime`. |
 | Not measured                | The production store of a team, and the move of its rows.                                                                                                                                                                                                                                       |
 
-### Measured for 0.14.0
-
-Proof on 2026-10-30 in team `nicu` on the development deployment `gallant-skunk-112` of `samebase`,
-with the Convex CLI login and `convex` 1.48.0. The production deployment of the store was not
-touched. The probe rows were deleted at the end, and the deployment is a seed again.
-
-| Check                     | Result                                                                                                                                                                                                                                                       |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| The seed                  | `npx convex dev --once` in `src/store`: `state:version` answered `4`, `state:host` `"seed"`, `state:stacks` `[]`. The committed `_generated` files did not change.                                                                                           |
-| The reader token          | A token of `reader:authorize` read a probe stack through `ConvexHttpClient` with the issuer check in place, on the seed and on the base. The `__redacted__` value was not in the reply. A read without a token and a read with a changed token were refused. |
-| The base                  | A scratch app installed the packed tarball and `convex` 1.48.0, mounted the component, and wrote the three files with host `"base"`. `tsc` with the tsconfig of the Convex codegen passed. `state:version` answered `4`, `state:host` `"base"`.              |
-| The rows across the hosts | A row that the seed wrote: the base read it, and the seed read it again after its next push.                                                                                                                                                                 |
-| The push of the provider  | `convex deploy --typecheck disable --codegen disable` in `node_modules/@samebase/alchemy-convex/src/store` of the scratch app, with a key of `PUSH_KEY_ACTIONS` only and an empty `HOME`, passed.                                                            |
-| Not measured              | The rule of `Convex.state()` on a real base: the provider uses the production deployment, and the unit tests cover the rule. The hub as a base.                                                                                                              |
-
 ## Limits
 
 - No lock: keep the CI concurrency group for each stage. No encryption beyond Convex at rest; a
@@ -443,12 +354,7 @@ touched. The probe rows were deleted at the end, and the deployment is a seed ag
 - The push of the store has no lock. Two runs of two package versions that both find an older
   store can push in the order new, then old, in the seconds between the second read of the version
   and the end of the push; the newer run then fails with both versions, and its next run pushes its
-  store again. The upgrade happens once for each new package version in a team. A base app that is
-  pushed in the same seconds is replaced by the store app, and the hub with it, until the next push
-  of the base app. So a team pushes its base for the first time when no stack of the team runs;
-  after that the provider never pushes, because the store answers `base`. The base repository pins
-  one version of this package for its stack and its app, so one bump of that pin upgrades the store
-  functions and the provider together.
+  store again. The upgrade happens once for each new package version in a team.
 - A team access token (0.6.1): `GET /token_details` names its team, and the dashboard's team list
   answers it HTTP 403, so a slug is checked against the `teamSlug` of the team's projects instead;
   a team without a project needs the numeric id. Measured with a temporary team token on a

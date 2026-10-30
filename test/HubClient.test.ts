@@ -9,9 +9,9 @@ import * as Schema from "effect/Schema";
 import { describe, expect, it, vi } from "vitest";
 import * as Convex from "../src/index.ts";
 import { fromValues } from "../src/Credentials.ts";
-import { registerDevelopmentClient } from "../src/HubClient.ts";
+import { HUB_PROJECT_NAME, registerDevelopmentClient } from "../src/HubClient.ts";
 import { ManagementApiLive } from "../src/ManagementApi.ts";
-import { STORE_PROJECT_NAME, RUN_KEY_ACTIONS } from "../src/State.ts";
+import { RUN_KEY_ACTIONS } from "../src/State.ts";
 import { FakeConvex, Hub } from "./fakeConvex.ts";
 
 const TEAM = 38516;
@@ -42,11 +42,11 @@ const client = (input: Convex.HubClientProps) =>
     };
   });
 
-/** A fake with the base of the team: the project of the state, with a hub on its production deployment. */
-const withBase = () => {
+/** A fake with the hub of the team on the production deployment of its project. */
+const withHub = () => {
   const fake = new FakeConvex().install();
   const [deployment] = fake.deploymentsOf(
-    fake.addProject({ name: STORE_PROJECT_NAME, teamId: TEAM }),
+    fake.addProject({ name: HUB_PROJECT_NAME, teamId: TEAM }),
   );
   if (deployment === undefined) throw new Error("the fake project has no deployment");
   const hub = new Hub(ISSUER);
@@ -57,9 +57,9 @@ const withBase = () => {
 const KeyBody = Schema.Struct({ allowedActions: Schema.Array(Schema.String) });
 
 describe("Convex.HubClient", () => {
-  test.provider("registers with a key of the base that runs internal functions only", (stack) =>
+  test.provider("registers with a key of the hub that runs internal functions only", (stack) =>
     Effect.gen(function* () {
-      const { fake, hub, deployment } = withBase();
+      const { fake, hub, deployment } = withHub();
       const out = yield* stack.deploy(client(props()));
       expect(out).toEqual({ issuer: ISSUER, clientId: "cl_1", secret: "secret-of-cl_1" });
       expect(hub.clients.get("cl_1")).toEqual({
@@ -82,7 +82,7 @@ describe("Convex.HubClient", () => {
 
   test.provider("a deploy with the same redirect URI does not reach the hub", (stack) =>
     Effect.gen(function* () {
-      const { fake, hub } = withBase();
+      const { fake, hub } = withHub();
       const first = yield* stack.deploy(client(props()));
       const again = yield* stack.deploy(
         client(props({ clientName: "other", softwareVersion: "d" })),
@@ -95,7 +95,7 @@ describe("Convex.HubClient", () => {
 
   test.provider("another app or team stores the new props and keeps the client", (stack) =>
     Effect.gen(function* () {
-      const { fake, hub } = withBase();
+      const { fake, hub } = withHub();
       const first = yield* stack.deploy(client(props()));
       const again = yield* stack.deploy(client(props({ app: "other" })));
       expect(again).toEqual(first);
@@ -106,7 +106,7 @@ describe("Convex.HubClient", () => {
 
   test.provider("another redirect URI is a new client, and the old one goes", (stack) =>
     Effect.gen(function* () {
-      const { hub } = withBase();
+      const { hub } = withHub();
       yield* stack.deploy(client(props()));
       const next = yield* stack.deploy(client(props({ redirectUri: `${CALLBACK}2` })));
       expect(next.clientId).toBe("cl_2");
@@ -116,14 +116,14 @@ describe("Convex.HubClient", () => {
 
   test.provider("a destroy deletes the client", (stack) =>
     Effect.gen(function* () {
-      const { hub } = withBase();
+      const { hub } = withHub();
       yield* stack.deploy(client(props()));
       yield* stack.destroy();
       expect(hub.clients.size).toBe(0);
     }),
   );
 
-  test.provider("a team without a base fails and names what is missing", (stack) =>
+  test.provider("a team without a hub project fails and names what is missing", (stack) =>
     Effect.gen(function* () {
       new FakeConvex().install();
       const error = yield* Effect.flip(stack.deploy(client(props())));
@@ -132,9 +132,9 @@ describe("Convex.HubClient", () => {
     }),
   );
 
-  test.provider("a base without a hub fails with the Convex message", (stack) =>
+  test.provider("a project without the hub functions fails with the Convex message", (stack) =>
     Effect.gen(function* () {
-      const { fake, deployment } = withBase();
+      const { fake, deployment } = withHub();
       fake.hubs.delete(deployment);
       const error = yield* Effect.flip(stack.deploy(client(props())));
       expect(error).toBeInstanceOf(Convex.HubClientFailed);
@@ -162,7 +162,7 @@ describe("registerDevelopmentClient", () => {
     );
 
   it("a deployment with all three variables keeps them", async () => {
-    const { hub } = withBase();
+    const { hub } = withHub();
     const convex = vi.fn(() => "HUB_ISSUER\nHUB_CLIENT_ID\nHUB_CLIENT_SECRET\nOTHER");
     expect(await run(convex)).toBeUndefined();
     expect(convex).toHaveBeenCalledTimes(1);
@@ -170,7 +170,7 @@ describe("registerDevelopmentClient", () => {
   });
 
   it("a deployment with no complete client registers, and the secret goes on standard input", async () => {
-    const { hub } = withBase();
+    const { hub } = withHub();
     const inputs: (string | undefined)[] = [];
     const calls: string[] = [];
     const url = await run((args, input) => {

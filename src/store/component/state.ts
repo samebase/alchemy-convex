@@ -8,7 +8,7 @@
 import { v, type Infer } from "convex/values";
 import type { MutationCtx, QueryCtx } from "./_generated/server.js";
 import { mutation, query } from "./_generated/server.js";
-import { runRecord } from "./runRecord.js";
+import { runRecord } from "./runRecord.ts";
 
 const stage = { stack: v.string(), stage: v.string() };
 const resource = { ...stage, fqn: v.string() };

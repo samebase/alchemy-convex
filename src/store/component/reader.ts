@@ -3,7 +3,7 @@
 // `ctx.auth`.
 import { v, type Infer } from "convex/values";
 import { query } from "./_generated/server.js";
-import { runRecord, validate } from "./runRecord.js";
+import { runRecord, validate } from "./runRecord.ts";
 
 const stage = v.object({
   name: v.string(),

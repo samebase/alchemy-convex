@@ -1,10 +1,9 @@
 // Convex.HubClient: one deployment of an app as a client of the identity hub
 // of its team.
 //
-// The hub is an app in the base of the team, the production deployment of the
-// project `samebase`, the project that holds the state of the team. It has
-// the internal functions of `@samebase/identity-broker` in its module
-// `identityBroker`. This resource finds the base by name and runs those
+// The hub is the production deployment of the project `samebase` of the team.
+// It has the internal functions of `@samebase/identity-broker` in its module
+// `identityBroker`. This resource finds the project by name and runs those
 // functions with a short-lived key, so a stack that has the Convex credential
 // of the team needs no other credential and no hub address. The hub answers
 // with its issuer and the client.
@@ -13,7 +12,7 @@
 // of it. A client belongs to one redirect URI: another URI is a new client. A
 // change of `app` updates the stored props and does not move the client: the
 // app is the identity of the users of the app, and it does not change. The
-// team does not change either: the state of a stack is in the base of its team.
+// team does not change either: the state of a stack is in its team.
 import { Resource } from "alchemy";
 import { isResolved } from "alchemy/Diff";
 import * as Provider from "alchemy/Provider";
@@ -24,7 +23,10 @@ import { ManagementApi, type ManagementApiService } from "./ManagementApi.ts";
 import { findProjectByName, prodDeploymentOf } from "./Project.ts";
 import type { Providers } from "./Providers.ts";
 import { withPushKey } from "./Push.ts";
-import { type FunctionApi, makeFunctionApi, RUN_KEY_ACTIONS, STORE_PROJECT_NAME } from "./State.ts";
+import { type FunctionApi, makeFunctionApi, RUN_KEY_ACTIONS } from "./State.ts";
+
+/** The name of the project of the hub in each team. */
+export const HUB_PROJECT_NAME = "samebase";
 
 export type HubDeploymentType = "production" | "development" | "preview";
 
@@ -63,13 +65,13 @@ export type HubClient = Resource<
 >;
 export const HubClient = Resource<HubClient>("IdentityHub.Client");
 
-/** The base of the team could not do the call. The reason is the Convex message: it holds no secret. */
+/** The hub of the team could not do the call. The reason is the Convex message: it holds no secret. */
 export class HubClientFailed extends Schema.TaggedError<HubClientFailed>()("HubClientFailed", {
   team: Schema.Union([Schema.String, Schema.Number]),
   reason: Schema.String,
 }) {
   override get message() {
-    return `Convex.HubClient: the base of team ${this.team}: ${this.reason}.`;
+    return `Convex.HubClient: the hub of team ${this.team}: ${this.reason}.`;
   }
 }
 
@@ -80,26 +82,26 @@ const Registered = Schema.Struct({
   clientSecret: Schema.NonEmptyString,
 });
 
-/** Runs `use` with the function API of the base of `team`, with a key of this call only. */
-const withBase = <A, E, R>(
+/** Runs `use` with the function API of the hub of `team`, with a key of this call only. */
+const withHub = <A, E, R>(
   api: ManagementApiService,
   team: string | number,
   use: (functions: FunctionApi) => Effect.Effect<A, E, R>,
 ) =>
   Effect.gen(function* () {
     const teamId = yield* api.resolveTeamId(team);
-    const project = yield* findProjectByName(api, teamId, STORE_PROJECT_NAME);
+    const project = yield* findProjectByName(api, teamId, HUB_PROJECT_NAME);
     if (project === undefined) {
       return yield* new HubClientFailed({
         team,
-        reason: `no project ${STORE_PROJECT_NAME}, which holds the hub`,
+        reason: `no project ${HUB_PROJECT_NAME}, which holds the hub`,
       });
     }
     const deployment = yield* prodDeploymentOf(api, project.id);
     if (deployment === undefined) {
       return yield* new HubClientFailed({
         team,
-        reason: `project ${STORE_PROJECT_NAME} has no production deployment`,
+        reason: `project ${HUB_PROJECT_NAME} has no production deployment`,
       });
     }
     return yield* withPushKey(api, deployment.name, RUN_KEY_ACTIONS, (key) =>
@@ -128,7 +130,7 @@ const runHub = (
  * client on the hub, which signs nobody in.
  */
 export const registerHubClient = (api: ManagementApiService, props: HubClientProps) =>
-  withBase(api, props.team, (functions) =>
+  withHub(api, props.team, (functions) =>
     runHub(functions, props.team, "registerClient", {
       appId: props.app,
       redirectUri: props.redirectUri,
@@ -154,7 +156,7 @@ export const registerHubClient = (api: ManagementApiService, props: HubClientPro
   );
 
 const unregister = (api: ManagementApiService, team: string | number, clientId: string) =>
-  withBase(api, team, (functions) => runHub(functions, team, "deleteClient", { clientId }));
+  withHub(api, team, (functions) => runHub(functions, team, "deleteClient", { clientId }));
 
 /** True when the client in state serves the redirect URI and deployment type of `props`. */
 const registeredFor = (output: HubClientAttributes, props: HubClientProps) =>

@@ -167,7 +167,8 @@ values explicitly: `Convex.providers(Convex.fromValues({ accessToken, deployKey 
 ## State in Convex
 
 `state: Convex.state({ team })` keeps the Alchemy state of every stack and stage of a Convex team in
-one project of that team, `samebase`, so a repository holds one secret and a stack can create
+one project of that team, `alchemy-state-store`, the same name as the Cloudflare state store of
+Alchemy, so a repository holds one secret and a stack can create
 and destroy its own project. [docs/design/convex-state.md](docs/design/convex-state.md) records the
 decisions and the measurements.
 
@@ -185,25 +186,15 @@ Every run needs the team token in `CONVEX_ACCESS_TOKEN`, or the Convex CLI login
 team access token names its team, so `Convex.state()` needs no `team` with one; a `team` slug that
 is set must be the slug of that team, checked against its projects, and a token of another team
 fails the run. The Convex CLI login needs the slug or the id. The first run of a team creates
-the project `samebase` and pushes the store app of this package to its
+the project `alchemy-state-store` and pushes the store functions to its
 production deployment with the Convex CLI of the app; a later version of this package pushes a
-newer store app when it finds an older one. A store that is newer than the package fails the run
-with both versions, so the repositories of a team upgrade the package together. Each run makes a
+newer store when it finds an older one. A store that is newer than the package fails the run with
+both versions, so the repositories of a team upgrade the package together. Each run makes a
 deploy key of that deployment that can only run the store's internal functions, and deletes it at
 the end. Rows are in the tables `resources` and `outputs` of the component `alchemyState` in the
 dashboard, under the stack name.
 The store has no lock: run one deploy of a stage at a time, such as with a CI concurrency group.
 The store and its readers (Samebase) are released and upgraded together.
-
-The base app of a team can serve the store in the `samebase` project, next to its own components.
-It mounts the component from `@samebase/alchemy-convex/state/convex.config`. It exports the
-store functions of `@samebase/alchemy-convex/state/functions`:
-`stateFunctions(components.alchemyState, "base")` and `readerFunctions(components.alchemyState)`.
-It exports its auth config from `@samebase/alchemy-convex/state/auth.config`. Then
-`state:host` answers `"base"`, and `Convex.state()` never pushes over that app: a base
-that is older than the package fails the run with `OutdatedBase`, and the base app upgrades its
-`@samebase/alchemy-convex`. See
-[the design note](docs/design/convex-state.md#the-stores-functions-are-exported-and-a-base-is-never-pushed-over-0140).
 
 Store version 3 supports native subscriptions. A trusted server checks repository access, then
 calls internal `reader:authorize({ repository, subject })` with a deployment credential. It gives
@@ -284,8 +275,8 @@ call.
     has every action, because the command can do more than a push.
 
 - `Convex.HubClient`: `{ team, app, redirectUri, deploymentType, clientName, softwareVersion? }`
-  registers one deployment as a client of the identity hub of the team. The hub is in the base of the
-  team, the production deployment of the project `samebase`. The resource finds it by name and runs
+  registers one deployment as a client of the identity hub of the team. The hub is the production
+  deployment of the project `samebase`. The resource finds it by name and runs
   its internal function `identityBroker:registerClient` with a short-lived key, so the stack needs no
   other credential and no hub address. The first client of an `app` creates the app. Outputs
   `issuer`, `clientId`, `clientSecret`, `redirectUri`, `deploymentType`, and `clientName`, which the

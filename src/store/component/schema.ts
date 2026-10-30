@@ -1,6 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
-import { runRecord } from "./runRecord.js";
+import { runRecord } from "./runRecord.ts";
 
 // `value` is the JSON text of Alchemy's encodeState(...): the same text that
 // Alchemy's local state writes to a file. A Convex object would reject keys
