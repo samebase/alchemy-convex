@@ -1,7 +1,7 @@
 // Convex.HubClient: one deployment of an app as a client of the identity hub
 // of its team.
 //
-// The hub is the production deployment of the project `samebase` of the team.
+// The hub is the production deployment of the project `identity-hub` of the team.
 // It has the internal functions of `@samebase/identity-broker` in its module
 // `identityBroker`. This resource finds the project by name and runs those
 // functions with a short-lived key, so a stack that has the Convex credential
@@ -26,12 +26,12 @@ import { withPushKey } from "./Push.ts";
 import { type FunctionApi, makeFunctionApi, RUN_KEY_ACTIONS } from "./State.ts";
 
 /** The name of the project of the hub in each team. */
-export const HUB_PROJECT_NAME = "samebase";
+export const HUB_PROJECT_NAME = "identity-hub";
 
 export type HubDeploymentType = "production" | "development" | "preview";
 
 export interface HubClientProps {
-  /** The Convex team, a slug or an id, whose project `samebase` holds the hub. */
+  /** The Convex team, a slug or an id, whose project `identity-hub` holds the hub. */
   readonly team: string | number;
   /** The app on the hub, such as `scout`. The first client of an app creates it, as a first-party app. */
   readonly app: string;

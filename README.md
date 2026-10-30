@@ -276,7 +276,7 @@ call.
 
 - `Convex.HubClient`: `{ team, app, redirectUri, deploymentType, clientName, softwareVersion? }`
   registers one deployment as a client of the identity hub of the team. The hub is the production
-  deployment of the project `samebase`. The resource finds it by name and runs
+  deployment of the project `identity-hub`. The resource finds it by name and runs
   its internal function `identityBroker:registerClient` with a short-lived key, so the stack needs no
   other credential and no hub address. The first client of an `app` creates the app. Outputs
   `issuer`, `clientId`, `clientSecret`, `redirectUri`, `deploymentType`, and `clientName`, which the

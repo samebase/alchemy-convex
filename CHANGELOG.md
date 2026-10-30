@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.17.0 (unreleased)
+
+The hub is the project `identity-hub`, a name that says what the project holds.
+
+- `Convex.HubClient` and the command `alchemy-convex hub-client` find the hub in the project
+  `identity-hub`. Rename the project with `PATCH /projects/{project_id}` and `name: "identity-hub"`.
+  The slug does not matter, because the lookup uses the name.
+- Upgrade every stack that has a hub client together with the rename. A run on an older version
+  fails with a clear error when it must register or delete a client, and it creates nothing. A
+  deployment whose client exists keeps working, because a deploy calls the hub only for a change.
+
 ## 0.16.0 (unreleased)
 
 The state store has its own project again, `alchemy-state-store`, the name of the Cloudflare state
