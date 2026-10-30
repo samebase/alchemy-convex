@@ -8,8 +8,9 @@ The hub is the project `identity-hub`, a name that says what the project holds.
   `identity-hub`. Rename the project with `PATCH /projects/{project_id}` and `name: "identity-hub"`.
   The slug does not matter, because the lookup uses the name.
 - Upgrade every stack that has a hub client together with the rename. A run on an older version
-  fails with a clear error when it must register or delete a client, and it creates nothing. A
-  deployment whose client exists keeps working, because a deploy calls the hub only for a change.
+  fails with a clear error when it must register or delete a client. A new preview that fails this
+  way keeps its deployment, so rerun the stack after the upgrade, or destroy the stage. A deployment
+  whose client exists keeps working, because a deploy calls the hub only for a change.
 
 ## 0.16.0 (unreleased)
 
