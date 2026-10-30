@@ -38,7 +38,7 @@ export {
   runRecord,
   withRunRecord,
 } from "./RunRecord.ts";
-export { state, STORE_PROJECT_NAME } from "./State.ts";
+export { OutdatedBase, state, STORE_PROJECT_NAME } from "./State.ts";
 export {
   CodePushFailed,
   ConvexAppNotFound,
