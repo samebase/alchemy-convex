@@ -9,11 +9,11 @@
 // of the team needs no other credential and no hub address. The hub answers
 // with its issuer and the client.
 //
-// The hub has no call that reads a client, so the state is the only record of
-// it. A client belongs to one redirect URI: another URI is a new client. A
-// change of `app` does not move a client: the app is the identity of the users
-// of the app, and it does not change. The team does not change either: the
-// state of a stack is in the base of its team.
+// The hub keeps only the hash of the secret, so the state is the only record
+// of it. A client belongs to one redirect URI: another URI is a new client. A
+// change of `app` updates the stored props and does not move the client: the
+// app is the identity of the users of the app, and it does not change. The
+// team does not change either: the state of a stack is in the base of its team.
 import { Resource } from "alchemy";
 import { isResolved } from "alchemy/Diff";
 import * as Provider from "alchemy/Provider";
@@ -166,15 +166,17 @@ export const HubClientProvider = () =>
     Effect.gen(function* () {
       const api = yield* ManagementApi;
       return {
-        diff: ({ news, output }) =>
+        diff: ({ news, olds, output }) =>
           Effect.succeed(
             // Props that are unresolved at plan time, such as a redirectUri from a deployment that
             // this run creates, are compared in reconcile.
             !isResolved(news) || output === undefined
               ? undefined
-              : registeredFor(output, news)
-                ? ({ action: "noop" } as const)
-                : ({ action: "replace" } as const),
+              : !registeredFor(output, news)
+                ? ({ action: "replace" } as const)
+                : olds.team === news.team && olds.app === news.app
+                  ? ({ action: "noop" } as const)
+                  : ({ action: "update" } as const),
           ),
 
         read: ({ output }) => Effect.succeed(output),

@@ -6,8 +6,8 @@
 Convex credential of the stack. It replaces `IdentityHub.Client` of
 `@samebase/alchemy-identity-hub`, which needed a registration token and the address of the hub. A
 client that a stack registered with the old resource stays: the resource type is the same, and a
-deploy with the same redirect URI does not reach the hub. The first deploy needs a hub with
-`@samebase/identity-broker` 0.7.0.
+deploy with the same redirect URI stores the new props and does not reach the hub. The first deploy
+needs a hub with `@samebase/identity-broker` 0.7.0.
 
 The command `alchemy-convex hub-client` does the same for a development deployment.
 

@@ -93,6 +93,17 @@ describe("Convex.HubClient", () => {
     }),
   );
 
+  test.provider("another app or team stores the new props and keeps the client", (stack) =>
+    Effect.gen(function* () {
+      const { fake, hub } = withBase();
+      const first = yield* stack.deploy(client(props()));
+      const again = yield* stack.deploy(client(props({ app: "other" })));
+      expect(again).toEqual(first);
+      expect(hub.clients.size).toBe(1);
+      expect(fake.functionCalls).toHaveLength(1);
+    }),
+  );
+
   test.provider("another redirect URI is a new client, and the old one goes", (stack) =>
     Effect.gen(function* () {
       const { hub } = withBase();
