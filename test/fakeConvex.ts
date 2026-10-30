@@ -67,6 +67,22 @@ export interface Store {
   readonly outputs: Map<string, string>;
 }
 
+/** The admin functions of an identity hub, as the broker answers them. */
+export class Hub {
+  readonly clients = new Map<string, Record<string, unknown>>();
+  private nextClient = 1;
+  constructor(readonly issuer: string) {}
+  run(path: string, args: Record<string, unknown>) {
+    if (path === "identityBroker:deleteClient") {
+      this.clients.delete(String(args["clientId"]));
+      return null;
+    }
+    const clientId = `cl_${this.nextClient++}`;
+    this.clients.set(clientId, args);
+    return { issuer: this.issuer, clientId, clientSecret: `secret-of-${clientId}` };
+  }
+}
+
 /** The internal functions of the store that a query key runs, and those that need a mutation key. */
 const STORE_QUERIES = [
   "version",
@@ -82,6 +98,7 @@ const STORE_QUERIES = [
 const STORE_MUTATIONS = ["set", "remove", "removeStack", "setOutput"];
 /** The store version that added a function; every other function is in version 1 (0.6.0). */
 const STORE_FUNCTION_SINCE: Record<string, number> = { readStack: 2 };
+const HubCall = Schema.Struct({ args: Schema.Record(Schema.String, Schema.Unknown) });
 const FunctionCall = Schema.Struct({
   path: Schema.String,
   args: Schema.Struct({
@@ -158,6 +175,8 @@ export class FakeConvex {
   readonly stores = new Map<string, Store>();
   /** The push events of the fake CLI that this fake applied already, one install for each. */
   private appliedPushes = new Set<string>();
+  /** The identity hub of each deployment that has one: POST /api/function answers its admin functions. */
+  readonly hubs = new Map<string, Hub>();
   /** The store functions that ran, as "<deployment> <path>" lines. */
   readonly functionCalls: string[] = [];
   /** Every deploy key secret ever created for each deployment, also the deleted ones. */
@@ -474,6 +493,21 @@ export class FakeConvex {
     const key = this.keysOf(this.keys, deployment).find((candidate) => candidate.secret === secret);
     if (key === undefined) return json(403, stateFixture("function_no_key.json"));
     const { path, args } = Schema.decodeUnknownSync(FunctionCall)(body);
+    const hub = this.hubs.get(deployment);
+    if (path.startsWith("identityBroker:") && hub !== undefined) {
+      if (
+        key.actions !== undefined &&
+        !key.actions.includes("deployment:functions:runInternalMutations")
+      ) {
+        return json(200, {
+          ...stateFixture("function_version_missing.json"),
+          errorMessage: "no permission",
+        });
+      }
+      this.functionCalls.push(`${deployment} ${path}`);
+      const { args: hubArgs } = Schema.decodeUnknownSync(HubCall)(body);
+      return json(200, { ...stateFixture("function_version.json"), value: hub.run(path, hubArgs) });
+    }
     const name = path.replace(/^state:/, "");
     // Each push of the fake CLI with a key of this deployment installs the store app once: as a
     // real push, it replaces whatever answered, a base too, and keeps the rows.

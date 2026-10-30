@@ -4,6 +4,7 @@ import * as Provider from "alchemy/Provider";
 import * as Layer from "effect/Layer";
 import { type Credentials, fromConfig } from "./Credentials.ts";
 import { DeploymentProvider, DeploymentResource } from "./Deployment.ts";
+import { HubClient, HubClientProvider } from "./HubClient.ts";
 import { ManagementApiLive } from "./ManagementApi.ts";
 import { Project, ProjectProvider } from "./Project.ts";
 
@@ -15,8 +16,8 @@ export class Providers extends Provider.ProviderCollection<Providers>()("Convex"
  * `CONVEX_DEPLOY_KEY`).
  */
 export const providers = (credentials: Layer.Layer<Credentials> = fromConfig()) =>
-  Layer.effect(Providers, Provider.collection([Project, DeploymentResource])).pipe(
-    Layer.provide(Layer.mergeAll(ProjectProvider(), DeploymentProvider())),
+  Layer.effect(Providers, Provider.collection([Project, DeploymentResource, HubClient])).pipe(
+    Layer.provide(Layer.mergeAll(ProjectProvider(), DeploymentProvider(), HubClientProvider())),
     Layer.provide(ManagementApiLive()),
     Layer.provide(credentials),
     Layer.orDie,

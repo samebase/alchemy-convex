@@ -13,6 +13,7 @@ export default defineConfig({
     include: ["test/**/*.test.ts"],
   },
   pack: {
+    entry: ["src/index.ts", "src/cli.ts"],
     outDir: "lib",
     // "type": "module" makes the ESM output `index.js`, the file that `exports` names.
     fixedExtension: false,

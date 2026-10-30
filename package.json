@@ -1,6 +1,6 @@
 {
   "name": "@samebase/alchemy-convex",
-  "version": "0.14.1",
+  "version": "0.15.0",
   "description": "The Convex plane for Alchemy v2: projects, deployments, environment variables, and the push of the functions",
   "keywords": [
     "alchemy",
@@ -17,6 +17,9 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/samebase/alchemy-convex.git"
+  },
+  "bin": {
+    "alchemy-convex": "./lib/cli.js"
   },
   "files": [
     "lib",

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.15.0 (unreleased)
+
+`Convex.HubClient` registers a deployment as a client of the identity hub of the team, with the
+Convex credential of the stack. It replaces `IdentityHub.Client` of
+`@samebase/alchemy-identity-hub`, which needed a registration token and the address of the hub. A
+client that a stack registered with the old resource stays: the resource type is the same, and a
+deploy with the same redirect URI does not reach the hub. The first deploy needs a hub with
+`@samebase/identity-broker` 0.7.0.
+
+The command `alchemy-convex hub-client` does the same for a development deployment.
+
 ## 0.14.1 (unreleased)
 
 A base app compiles the exported store functions under its own tsconfig. `reader:repository` reads

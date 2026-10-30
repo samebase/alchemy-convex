@@ -8,9 +8,9 @@ Problem: 0.3 is shaped for Workers Builds: keys go to a build outside Alchemy, `
 
 ## Decision: adopt the 408 model, keep our implementation, do not vendor or depend
 
-- Resources: `Convex.Project` and `Convex.Deployment({ project, type, name?, source?, env? })`. The
-  push of `source` happens inside the deployment update, and `url` and `siteUrl` flow to other
-  resources. Reason: this is the 408 model, and it puts no key between resources.
+- Resources: `Convex.Project`, `Convex.HubClient`, and
+  `Convex.Deployment({ project, type, name?, source?, env? })`. The push of `source` happens inside
+  the deployment update, and `url` and `siteUrl` flow to other resources. Reason: this is the 408 model, and it puts no key between resources.
 - Not vendored: 735 keeps a separate `Code` that pushes on every apply (`Code.ts:34`), passes keys
   between resources, creates a new production deployment by reference and can delete it, writes
   Alchemy state through internal APIs (`internal/Lifecycle.ts`), and pins beta.82 and TypeScript 7.
