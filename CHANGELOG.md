@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.16.0 (unreleased)
+
+The state store has its own project again, `alchemy-state-store`, the name of the Cloudflare state
+store of Alchemy. The store and the identity hub have opposite owners: the package pushes the store,
+and a team forks and edits the hub. In one deployment, a broken hub deploy stops every stack of the
+team, and each store change has to reach the hub first.
+
+- `Convex.state()` finds or creates `alchemy-state-store`. Copy the rows of the old project first, or
+  the first run of each stack starts with no state. Move every repository of a team together.
+- `Convex.HubClient` finds the hub in the project `samebase`, which it now names as `HUB_PROJECT_NAME`.
+- The store app of this package is the only app that serves the store, so `state:host`, `OutdatedBase`,
+  and the exports `./state/*` go. The store version stays 4.
+
 ## 0.15.0 (unreleased)
 
 `Convex.HubClient` registers a deployment as a client of the identity hub of the team, with the

@@ -1,34 +1,16 @@
 // The store functions of src/store/convex and its alchemyState component in convex-test.
 import { describe, expect, it } from "vitest";
-import { components, internal } from "../src/store/convex/_generated/api.js";
+import { internal } from "../src/store/convex/_generated/api.js";
 import { STORE_VERSION } from "../src/store/convex/version.ts";
-import { stateFunctions } from "../src/store/functions.ts";
 import { storeTest } from "./storeTest.ts";
 
 const main = { stack: "samebase/app", stage: "main" };
 const preview = { stack: "samebase/app", stage: "pr-1" };
 
 describe("the state store", () => {
-  it("answers its wire version and its host", async () => {
+  it("answers its wire version", async () => {
     const t = storeTest();
     expect(await t.query(internal.state.version, {})).toBe(STORE_VERSION);
-    expect(await t.query(internal.state.host, {})).toBe("seed");
-  });
-
-  it("serves the same functions from a base app, which answers host base", async () => {
-    // A base app: the component mounted, and `state:*` from the factory with host "base".
-    const t = storeTest({
-      "../src/store/convex/state.ts": async () => stateFunctions(components.alchemyState, "base"),
-    });
-    expect(await t.query(internal.state.version, {})).toBe(STORE_VERSION);
-    expect(await t.query(internal.state.host, {})).toBe("base");
-    await t.mutation(internal.state.set, { ...main, fqn: "Project", value: "{}" });
-    expect(await t.query(internal.state.stacks, {})).toEqual(["samebase/app"]);
-    expect(await t.query(internal.state.readStack, { stack: "samebase/app" })).toEqual({
-      stages: [
-        { stage: "main", resources: [{ fqn: "Project", value: "{}" }], output: null, record: null },
-      ],
-    });
   });
 
   it("does not read a row of store version 3, which sits in a root table", async () => {

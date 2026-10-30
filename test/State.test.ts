@@ -25,7 +25,6 @@ import { RUN_RECORD_KEY, type RunRecord } from "../src/RunRecord.ts";
 import {
   makeConvexState,
   makeFunctionApi,
-  OutdatedBase,
   RUN_KEY_ACTIONS,
   state,
   STORE_PROJECT_NAME,
@@ -56,7 +55,10 @@ beforeEach(() => {
   store = join(app, "convex");
   mkdirSync(store, { recursive: true });
   mkdirSync(join(app, "node_modules", "convex"), { recursive: true });
-  writeFileSync(join(app, "package.json"), JSON.stringify({ name: "samebase", private: true }));
+  writeFileSync(
+    join(app, "package.json"),
+    JSON.stringify({ name: STORE_PROJECT_NAME, private: true }),
+  );
   writeFileSync(
     join(app, "node_modules", "convex", "package.json"),
     JSON.stringify({ name: "convex", bin: { convex: FAKE_CLI } }),
@@ -156,7 +158,7 @@ describe("Convex.state", () => {
 
     const [runKey, pushKey, pushKeyDelete] = keyCalls(fake);
     expect(Schema.decodeUnknownSync(KeyBody)(runKey?.body)).toEqual({
-      name: "samebase",
+      name: STORE_PROJECT_NAME,
       allowedActions: [...RUN_KEY_ACTIONS],
     });
     expect(Schema.decodeUnknownSync(KeyBody)(pushKey?.body).allowedActions).toEqual([
@@ -248,16 +250,11 @@ describe("Convex.state", () => {
     const deployment =
       fake.project(fake.addProject({ name: STORE_PROJECT_NAME, teamId: TEAM }))
         ?.prodDeploymentName ?? "";
-    // The deployment answers version 0 and has no `state:host`, as a seed from before 0.14.0,
-    // until the fake CLI "pushed", then the current version.
+    // The deployment answers version 0 until the fake CLI "pushed", then the current version.
     const store = fake.addStore(deployment, STORE_VERSION);
-    const older = { status: 200, body: { ...stateFixture("function_version.json"), value: 0 } };
-    const noHost = { status: 200, body: stateFixture("function_version_missing.json") };
     fake.scripted.set(`POST ${deployment}.convex.cloud/api/function`, [
-      older,
-      noHost,
-      older,
-      noHost,
+      { status: 200, body: { ...stateFixture("function_version.json"), value: 0 } },
+      { status: 200, body: { ...stateFixture("function_version.json"), value: 0 } },
     ]);
     await run(open());
     expect(await run(runs())).toHaveLength(1);
@@ -267,34 +264,6 @@ describe("Convex.state", () => {
       `answers store version ${STORE_VERSION + 1}, and this package needs store version ${STORE_VERSION}`,
     );
     expect(await run(runs())).toHaveLength(1);
-  });
-
-  it("runs on a base of its version, and never pushes over a base", async () => {
-    const fake = new FakeConvex().install();
-    const deployment =
-      fake.project(fake.addProject({ name: STORE_PROJECT_NAME, teamId: TEAM }))
-        ?.prodDeploymentName ?? "";
-    // The base app of the team serves the store functions next to its own functions.
-    fake.markDeployed(deployment);
-    const store = fake.addStore(deployment, STORE_VERSION, "base");
-    const { service } = await run(open());
-    await run(service.set({ ...stack, fqn: "Project", value: created("Project") }));
-    expect(await run(service.list(stack))).toEqual(["Project"]);
-
-    // An older base fails the run with the versions and the dependency to upgrade.
-    store.version = STORE_VERSION - 1;
-    const outdated = await run(Effect.flip(open()));
-    expect(outdated).toBeInstanceOf(OutdatedBase);
-    expect(outdated.message).toBe(
-      `The base of team ${TEAM} (${deployment}) answers store version ${STORE_VERSION - 1}, and this package needs store version ${STORE_VERSION}. Convex.state does not push over a base. Upgrade the dependency @samebase/alchemy-convex of the base app to the version of this package, and push the base app.`,
-    );
-    // A newer base fails the run as a newer seed does.
-    store.version = STORE_VERSION + 1;
-    expect(await failureOf(open())).toContain(
-      `answers store version ${STORE_VERSION + 1}, and this package needs store version ${STORE_VERSION}`,
-    );
-    expect(await run(runs())).toEqual([]);
-    expect(store.host).toBe("base");
   });
 
   it("stores the stack output with the run record, and the stack's own value under the key", async () => {

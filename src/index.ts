@@ -19,6 +19,7 @@ export {
   ProductionDeploymentNotFound,
 } from "./Deployment.ts";
 export {
+  HUB_PROJECT_NAME,
   HubClient,
   type HubClientAttributes,
   HubClientFailed,
@@ -45,7 +46,7 @@ export {
   runRecord,
   withRunRecord,
 } from "./RunRecord.ts";
-export { OutdatedBase, state, STORE_PROJECT_NAME } from "./State.ts";
+export { state, STORE_PROJECT_NAME } from "./State.ts";
 export {
   CodePushFailed,
   ConvexAppNotFound,
