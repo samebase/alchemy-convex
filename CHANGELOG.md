@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.14.1 (unreleased)
+
+A base app compiles the exported store functions under its own tsconfig. `reader:repository` reads
+its custom claims with bracket access, so a base app with `noPropertyAccessFromIndexSignature` needs
+no change. No function changes.
+
 ## 0.14.0 (unreleased)
 
 The package exports the functions of the state store, so that the base app of a team serves the
