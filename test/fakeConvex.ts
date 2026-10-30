@@ -58,8 +58,11 @@ export interface StoreRow {
 /** The store on one deployment: its version, the app that serves it, its rows, and outputs. */
 export interface Store {
   version: number;
-  /** `seed`: the store app of src/store/convex. `base`: the base app of the team. */
-  host: "seed" | "base";
+  /**
+   * `seed`: the store app of src/store/convex. `base`: the base app of the team. Undefined for a
+   * store without `state:host`, from before 0.14.0.
+   */
+  host: "seed" | "base" | undefined;
   rows: StoreRow[];
   readonly outputs: Map<string, string>;
 }
@@ -67,6 +70,7 @@ export interface Store {
 /** The internal functions of the store that a query key runs, and those that need a mutation key. */
 const STORE_QUERIES = [
   "version",
+  "host",
   "stacks",
   "stages",
   "list",
@@ -78,8 +82,6 @@ const STORE_QUERIES = [
 const STORE_MUTATIONS = ["set", "remove", "removeStack", "setOutput"];
 /** The store version that added a function; every other function is in version 1 (0.6.0). */
 const STORE_FUNCTION_SINCE: Record<string, number> = { readStack: 2 };
-/** The store version whose `version` answers `{ version, host }`; an older seed answers a bare number. */
-const VERSION_HOST_SINCE = 5;
 const FunctionCall = Schema.Struct({
   path: Schema.String,
   args: Schema.Struct({
@@ -207,7 +209,7 @@ export class FakeConvex {
   }
 
   /** Gives a deployment the store at `version` that `host` serves, with no rows, and returns it. */
-  addStore(deployment: string, version: number, host: Store["host"] = "seed") {
+  addStore(deployment: string, version: number, host?: Store["host"]) {
     const store: Store = { version, host, rows: [], outputs: new Map() };
     this.stores.set(deployment, store);
     return store;
@@ -478,7 +480,7 @@ export class FakeConvex {
     for (const push of this.newCliPushes(deployment)) {
       this.appliedPushes.add(push);
       const pushed = this.stores.get(deployment);
-      if (pushed === undefined) this.addStore(deployment, STORE_VERSION);
+      if (pushed === undefined) this.addStore(deployment, STORE_VERSION, "seed");
       else {
         pushed.version = STORE_VERSION;
         pushed.host = "seed";
@@ -492,7 +494,8 @@ export class FakeConvex {
     if (
       store === undefined ||
       !(STORE_QUERIES.includes(name) || STORE_MUTATIONS.includes(name)) ||
-      store.version < (STORE_FUNCTION_SINCE[name] ?? 1)
+      store.version < (STORE_FUNCTION_SINCE[name] ?? 1) ||
+      (name === "host" && store.host === undefined)
     ) {
       return error(
         `[Request ID: fake] Server Error\nCould not find function for '${path}'. Did you forget to run \`npx convex dev\`?\n`,
@@ -512,14 +515,10 @@ export class FakeConvex {
     const index = store.rows.findIndex((row) => inStage(row) && row.fqn === fqn);
     const output = `${stack}/${stage}`;
     switch (name) {
-      // A base answers `{ version, host }` at each version: a test of an
-      // older base stands for a base that is older than the package.
       case "version":
-        return reply(
-          store.host === "seed" && store.version < VERSION_HOST_SINCE
-            ? store.version
-            : { version: store.version, host: store.host },
-        );
+        return reply(store.version);
+      case "host":
+        return reply(store.host);
       case "stacks":
         return reply([...new Set(store.rows.map((row) => row.stack))].sort());
       case "stages":

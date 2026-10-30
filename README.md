@@ -200,10 +200,10 @@ It mounts the component from `@samebase/alchemy-convex/state/convex.config`. It 
 store functions of `@samebase/alchemy-convex/state/functions`:
 `stateFunctions(components.alchemyState, "base")` and `readerFunctions(components.alchemyState)`.
 It exports its auth config from `@samebase/alchemy-convex/state/auth.config`. Then
-`state:version` answers `host: "base"`, and `Convex.state()` never pushes over that app: a base
+`state:host` answers `"base"`, and `Convex.state()` never pushes over that app: a base
 that is older than the package fails the run with `OutdatedBase`, and the base app upgrades its
 `@samebase/alchemy-convex`. See
-[the design note](docs/design/convex-state.md#the-stores-functions-are-exported-and-a-base-is-never-pushed-over-store-version-5).
+[the design note](docs/design/convex-state.md#the-stores-functions-are-exported-and-a-base-is-never-pushed-over-0140).
 
 Store version 3 supports native subscriptions. A trusted server checks repository access, then
 calls internal `reader:authorize({ repository, subject })` with a deployment credential. It gives

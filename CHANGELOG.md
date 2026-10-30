@@ -3,15 +3,15 @@
 ## 0.14.0 (unreleased)
 
 The package exports the functions of the state store, so that the base app of a team serves the
-store next to its own components. `Convex.state()` never pushes its store app over a base. Store
-version 5.
+store next to its own components. `Convex.state()` never pushes its store app over a base. The
+store version stays 4, so a consumer on 0.13.0 keeps working and moves when it wants to.
 
-- Breaking: store version 5. `state:version` answers `{ version, host }` (was a number). `host` is
-  `"seed"` for the store app of this package and `"base"` for the base app of a team. The next
-  provider run of each team pushes store version 5 to its seed. From then on, a run on 0.13.0 or
-  older fails with `bad store version` until that consumer moves to this version: every consumer
-  of a team moves at once. The other functions, their
-  arguments, their results, and the rows do not change.
+- New function `state:host` answers `"seed"` for the store app of this package and `"base"` for the
+  base app of a team. A store without it is a seed. No other function, argument, result, or row
+  changes.
+- `STORE_VERSION` rises only when a function that a released client calls changes or goes away.
+  Each consumer needs the exact number, so only such a change moves every consumer of a team at
+  once.
 - The package exports the store functions as code, and its store app `src/store/convex` uses the
   same exports:
   - `@samebase/alchemy-convex/state/functions`: `stateFunctions(alchemyState, host)`, the twelve
@@ -23,12 +23,14 @@ version 5.
     Convex codegen of an app that mounts the component imports.
 
   A base app mounts the component and writes three files; see
-  [the design note](docs/design/convex-state.md#the-stores-functions-are-exported-and-a-base-is-never-pushed-over-store-version-5).
+  [the design note](docs/design/convex-state.md#the-stores-functions-are-exported-and-a-base-is-never-pushed-over-0140).
 
-- Breaking: `Convex.state()` never pushes its store app over a base, because the push replaces
-  every function of the deployment. A base that answers an older store version fails the run with
+- `Convex.state()` never pushes its store app over a base, because the push replaces every
+  function of the deployment. A base that answers an older store version fails the run with
   `OutdatedBase` (exported): upgrade `@samebase/alchemy-convex` in the base app and push the base
   app. A newer store fails the run as before, from either host.
+- `reader:repository` accepts only a token of the deployment's own issuer, so a base that accepts
+  other auth providers does not widen who can read a repository.
 
 ## 0.13.0 (unreleased)
 

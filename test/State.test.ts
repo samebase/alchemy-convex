@@ -248,12 +248,16 @@ describe("Convex.state", () => {
     const deployment =
       fake.project(fake.addProject({ name: STORE_PROJECT_NAME, teamId: TEAM }))
         ?.prodDeploymentName ?? "";
-    // The deployment answers version 0, a bare number as a seed of store
-    // version 4 or older does, until the fake CLI "pushed", then the current version.
+    // The deployment answers version 0 and has no `state:host`, as a seed from before 0.14.0,
+    // until the fake CLI "pushed", then the current version.
     const store = fake.addStore(deployment, STORE_VERSION);
+    const older = { status: 200, body: { ...stateFixture("function_version.json"), value: 0 } };
+    const noHost = { status: 200, body: stateFixture("function_version_missing.json") };
     fake.scripted.set(`POST ${deployment}.convex.cloud/api/function`, [
-      { status: 200, body: { ...stateFixture("function_version_1.json"), value: 0 } },
-      { status: 200, body: { ...stateFixture("function_version_1.json"), value: 0 } },
+      older,
+      noHost,
+      older,
+      noHost,
     ]);
     await run(open());
     expect(await run(runs())).toHaveLength(1);

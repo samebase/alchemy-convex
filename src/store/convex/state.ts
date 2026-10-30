@@ -8,6 +8,7 @@ import { components } from "./_generated/api.js";
 
 export const {
   version,
+  host,
   stacks,
   stages,
   list,

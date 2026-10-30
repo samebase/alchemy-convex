@@ -30,17 +30,24 @@ const storeHost = v.union(v.literal("seed"), v.literal("base"));
 
 /**
  * The internal `state:*` functions over the mounted component `alchemyState`.
- * `state:version` answers `host`, the app that serves them. Export each one
+ * `state:host` answers `host`, the app that serves them. Export each one
  * by name from the app's `convex/state.ts`.
  */
 export const stateFunctions = (alchemyState: ComponentApi, host: Infer<typeof storeHost>) => {
   const state = alchemyState.state;
   return {
-    /** The wire version of this store, compared with the client's STORE_VERSION, and the app that serves it. */
+    /** The wire version of this store, compared with the client's STORE_VERSION. */
     version: internalQueryGeneric({
       args: {},
-      returns: v.object({ version: v.number(), host: storeHost }),
-      handler: async () => ({ version: STORE_VERSION, host }),
+      returns: v.number(),
+      handler: async () => STORE_VERSION,
+    }),
+
+    /** The app that serves this store. Convex.state() reads it before it pushes over an older store. */
+    host: internalQueryGeneric({
+      args: {},
+      returns: storeHost,
+      handler: async () => host,
     }),
 
     /** Stacks with at least one resource or one output, sorted. */

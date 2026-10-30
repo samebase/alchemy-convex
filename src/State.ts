@@ -27,8 +27,8 @@
 // anything, and uses the oldest: both runs end on one store.
 //
 // Samebase reads `stacks`, `getOutput`, `readStack`, and `reader:repository`
-// by name. The store and its readers are released and upgraded together:
-// STORE_VERSION rises with each change of a function, and a client works only
+// by name. STORE_VERSION is the wire contract: it rises only when a function
+// that a released client calls changes or goes away, and a client works only
 // with a store of its own version. An older seed is pushed over; an older base
 // and a newer store fail the run.
 //
@@ -232,31 +232,35 @@ const remoteOf = (api: FunctionApi, record: RunRecord | undefined) => {
   };
 };
 
-/**
- * The reply of `state:version` since store version 5: the store version and
- * the app that serves it, `seed` (the store app of this package) or `base`
- * (the base app of the team). A store of version 4 or older answers a bare
- * number, and only the store app of this package served those versions.
- */
-const StoreVersion = Schema.Union([
-  Schema.Struct({ version: Schema.Number, host: Schema.Literals(["seed", "base"]) }),
-  Schema.Number,
-]);
-
-/** The version and host that the store answers, or undefined when the deployment has no `state:version`. */
+/** The version that the store answers, or undefined when the deployment has no `state:version`. */
 const storeVersion = (api: FunctionApi) =>
-  api.call("state:version", {}).pipe(
-    Effect.flatMap((reply) =>
-      reply.status === "error" && MISSING_FUNCTION.test(reply.errorMessage)
-        ? Effect.succeed(undefined)
-        : valueOf(reply).pipe(
-            Effect.flatMap(decode(StoreVersion, "store version")),
-            Effect.map((store) =>
-              typeof store === "number" ? { version: store, host: "seed" as const } : store,
+  api
+    .call("state:version", {})
+    .pipe(
+      Effect.flatMap((reply) =>
+        reply.status === "error" && MISSING_FUNCTION.test(reply.errorMessage)
+          ? Effect.succeed(undefined)
+          : valueOf(reply).pipe(Effect.flatMap(decode(Schema.Number, "store version"))),
+      ),
+    );
+
+/**
+ * The app that serves the store. A store without `state:host` is a seed: it
+ * was pushed before 0.14.0, and only the store app of this package served
+ * those stores.
+ */
+const storeHost = (api: FunctionApi) =>
+  api
+    .call("state:host", {})
+    .pipe(
+      Effect.flatMap((reply) =>
+        reply.status === "error" && MISSING_FUNCTION.test(reply.errorMessage)
+          ? Effect.succeed("seed" as const)
+          : valueOf(reply).pipe(
+              Effect.flatMap(decode(Schema.Literals(["seed", "base"]), "store host")),
             ),
-          ),
-    ),
-  );
+      ),
+    );
 
 /**
  * The base app of the team serves an older store. Convex.state() never
@@ -413,10 +417,16 @@ export const makeConvexState = (options: StoreOptions) =>
 
     // The store app is pushed only over no store or an older seed. A base
     // serves the same functions, and a push would erase the base app.
-    let store = yield* storeVersion(functions);
-    if (store === undefined || (store.host === "seed" && store.version < STORE_VERSION)) {
+    const needsPush = (found: number | undefined) =>
+      found === undefined
+        ? Effect.succeed(true)
+        : found < STORE_VERSION
+          ? storeHost(functions).pipe(Effect.map((host) => host === "seed"))
+          : Effect.succeed(false);
+    let version = yield* storeVersion(functions);
+    if (yield* needsPush(version)) {
       // Code without `state:version` is another app with the name of the store.
-      if (store === undefined && deployment.lastDeployTime) {
+      if (version === undefined && deployment.lastDeployTime) {
         return yield* failure(
           `project ${STORE_PROJECT_NAME} (${project.id}) of team ${team} has code that is not the state store, and Convex.state does not push over it. Rename that project in the Convex dashboard.`,
         );
@@ -424,18 +434,22 @@ export const makeConvexState = (options: StoreOptions) =>
       // Another run can push a newer store, or the base app, in the meantime:
       // read again right before the push. The push itself has no lock (see
       // the design note).
-      store = yield* storeVersion(functions);
-      if (store === undefined || (store.host === "seed" && store.version < STORE_VERSION)) {
+      version = yield* storeVersion(functions);
+      if (yield* needsPush(version)) {
         yield* pushStore(options, deployment);
-        store = yield* storeVersion(functions);
+        version = yield* storeVersion(functions);
       }
     }
-    if (store?.host === "base" && store.version < STORE_VERSION) {
-      return yield* new OutdatedBase({ team, deployment: deployment.name, version: store.version });
+    if (
+      version !== undefined &&
+      version < STORE_VERSION &&
+      (yield* storeHost(functions)) === "base"
+    ) {
+      return yield* new OutdatedBase({ team, deployment: deployment.name, version });
     }
-    if (store?.version !== STORE_VERSION) {
+    if (version !== STORE_VERSION) {
       return yield* failure(
-        `${deployment.name} answers store version ${store?.version ?? "none"}, and this package needs store version ${STORE_VERSION}.`,
+        `${deployment.name} answers store version ${version ?? "none"}, and this package needs store version ${STORE_VERSION}.`,
       );
     }
 
