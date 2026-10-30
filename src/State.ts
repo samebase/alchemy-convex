@@ -229,17 +229,31 @@ const remoteOf = (api: FunctionApi, record: RunRecord | undefined) => {
   };
 };
 
-/** The version that the store answers, or undefined when the deployment has no `state:version`. */
+/**
+ * The reply of `state:version` since store version 5: the store version and
+ * the app that serves it, `seed` (the store app of this package) or `base`
+ * (the base app of the team). A store of version 4 or older answers a bare
+ * number, and only the store app of this package served those versions.
+ */
+const StoreVersion = Schema.Union([
+  Schema.Struct({ version: Schema.Number, host: Schema.Literals(["seed", "base"]) }),
+  Schema.Number,
+]);
+
+/** The version and host that the store answers, or undefined when the deployment has no `state:version`. */
 const storeVersion = (api: FunctionApi) =>
-  api
-    .call("state:version", {})
-    .pipe(
-      Effect.flatMap((reply) =>
-        reply.status === "error" && MISSING_FUNCTION.test(reply.errorMessage)
-          ? Effect.succeed(undefined)
-          : valueOf(reply).pipe(Effect.flatMap(decode(Schema.Number, "store version"))),
-      ),
-    );
+  api.call("state:version", {}).pipe(
+    Effect.flatMap((reply) =>
+      reply.status === "error" && MISSING_FUNCTION.test(reply.errorMessage)
+        ? Effect.succeed(undefined)
+        : valueOf(reply).pipe(
+            Effect.flatMap(decode(StoreVersion, "store version")),
+            Effect.map((store) =>
+              typeof store === "number" ? { version: store, host: "seed" as const } : store,
+            ),
+          ),
+    ),
+  );
 
 /**
  * The functions directory of the store app, `src/store/convex` of this
@@ -379,7 +393,7 @@ export const makeConvexState = (options: StoreOptions) =>
         ),
     };
 
-    let version = yield* storeVersion(functions);
+    let version = (yield* storeVersion(functions))?.version;
     if (version === undefined || version < STORE_VERSION) {
       // Code without `state:version` is another app with the name of the store.
       if (version === undefined && deployment.lastDeployTime) {
@@ -389,10 +403,10 @@ export const makeConvexState = (options: StoreOptions) =>
       }
       // Another run can push a newer store in the meantime: read again right
       // before the push. The push itself has no lock (see the design note).
-      version = yield* storeVersion(functions);
+      version = (yield* storeVersion(functions))?.version;
       if (version === undefined || version < STORE_VERSION) {
         yield* pushStore(options, deployment);
-        version = yield* storeVersion(functions);
+        version = (yield* storeVersion(functions))?.version;
       }
     }
     if (version !== STORE_VERSION) {

@@ -7,8 +7,9 @@ import schema from "../src/store/component/schema.ts";
 const app = import.meta.glob("../src/store/convex/**/*.ts");
 const component = import.meta.glob("../src/store/component/**/*.ts");
 
-export const storeTest = () => {
-  const t = convexTest({ modules: app });
+/** The store app, with the modules of `replace` in place of its own modules of the same path. */
+export const storeTest = (replace: Record<string, () => Promise<unknown>> = {}) => {
+  const t = convexTest({ modules: { ...app, ...replace } });
   t.registerComponent("alchemyState", schema, component);
   return t;
 };
