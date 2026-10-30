@@ -4,18 +4,21 @@
 // every stack and stage of the team in its production deployment: the
 // tables `resources (stack, stage, fqn, value)` and `outputs (stack, stage,
 // value)` of the alchemyState component (src/store/component), served by the
-// functions of src/store/convex. The store lives
-// outside every resource that a stack manages, so a stack can create and
-// destroy its own project. See docs/design/convex-state.md.
+// functions of src/store/functions.ts. Two apps serve them: the store app of
+// src/store/convex (a seed), which this provider pushes, and the base app of
+// the team (a base), which mounts the component next to its own components.
+// The store lives outside every resource that a stack manages, so a stack
+// can create and destroy its own project. See docs/design/convex-state.md.
 //
 // Bootstrap, on the first call of the run: the team token (CONVEX_ACCESS_TOKEN,
 // or the Convex CLI login) finds the project by name, or creates it; a deploy
 // key of its production deployment that can run internal queries and
 // mutations, and nothing else, is created for the run and deleted at its
-// end; the `state:version` query says whether the deployment has the store
-// of this version. Without one, or with an older one, the installed Convex
-// CLI pushes src/store/convex to it, with a push key that is deleted after
-// the push. The raw state functions are internal; authenticated readers get
+// end; the `state:version` query says the store version and the app that
+// serves it. Without one, or with an older seed, the installed Convex CLI
+// pushes src/store/convex to it, with a push key that is deleted after the
+// push. An older base fails the run: a push of the store app would erase the
+// base app. The raw state functions are internal; authenticated readers get
 // repository-scoped subscriptions with secret values removed. A key that stops working during a
 // long run (it expires after two hours) is replaced once per call.
 //
@@ -24,10 +27,10 @@
 // anything, and uses the oldest: both runs end on one store.
 //
 // Samebase reads `stacks`, `getOutput`, `readStack`, and `reader:repository`
-// by name. The store and its readers are released and upgraded together:
-// STORE_VERSION rises with each change of a function, and a client works only
-// with a store of its own version. An older store is pushed over; a newer one
-// fails the run.
+// by name. STORE_VERSION is the wire contract: it rises only when a function
+// that a released client calls changes or goes away, and a client works only
+// with a store of its own version. An older seed is pushed over; an older base
+// and a newer store fail the run.
 //
 // The stage output that `setOutput` stores is the stack's output plus the
 // run record of src/RunRecord.ts under the key `samebase.run`: the
@@ -242,6 +245,39 @@ const storeVersion = (api: FunctionApi) =>
     );
 
 /**
+ * The app that serves the store. A store without `state:host` is a seed: it
+ * was pushed before 0.14.0, and only the store app of this package served
+ * those stores.
+ */
+const storeHost = (api: FunctionApi) =>
+  api
+    .call("state:host", {})
+    .pipe(
+      Effect.flatMap((reply) =>
+        reply.status === "error" && MISSING_FUNCTION.test(reply.errorMessage)
+          ? Effect.succeed("seed" as const)
+          : valueOf(reply).pipe(
+              Effect.flatMap(decode(Schema.Literals(["seed", "base"]), "store host")),
+            ),
+      ),
+    );
+
+/**
+ * The base app of the team serves an older store. Convex.state() never
+ * pushes its store app over a base, because the push replaces every function
+ * of the deployment and so erases the base app.
+ */
+export class OutdatedBase extends Schema.TaggedError<OutdatedBase>()("OutdatedBase", {
+  team: Schema.Union([Schema.String, Schema.Number]),
+  deployment: Schema.String,
+  version: Schema.Number,
+}) {
+  override get message() {
+    return `The base of team ${this.team} (${this.deployment}) answers store version ${this.version}, and this package needs store version ${STORE_VERSION}. Convex.state does not push over a base. Upgrade the dependency @samebase/alchemy-convex of the base app to the version of this package, and push the base app.`;
+  }
+}
+
+/**
  * The functions directory of the store app, `src/store/convex` of this
  * package. This file is `src/State.ts` in a checkout and a chunk in `lib/`
  * in the installed package, which ships `src` too, so the directory is
@@ -330,8 +366,8 @@ const createStoreProject = (api: ManagementApiService, teamId: number, team: str
 
 /**
  * The StateService over the `samebase` project of the team: found or
- * created, its store pushed when it is missing or older, and read and
- * written with the keys of this run.
+ * created, its store app pushed when the store is missing or an older seed,
+ * and read and written with the keys of this run.
  */
 export const makeConvexState = (options: StoreOptions) =>
   Effect.gen(function* () {
@@ -379,21 +415,37 @@ export const makeConvexState = (options: StoreOptions) =>
         ),
     };
 
+    // The store app is pushed only over no store or an older seed. A base
+    // serves the same functions, and a push would erase the base app.
+    const needsPush = (found: number | undefined) =>
+      found === undefined
+        ? Effect.succeed(true)
+        : found < STORE_VERSION
+          ? storeHost(functions).pipe(Effect.map((host) => host === "seed"))
+          : Effect.succeed(false);
     let version = yield* storeVersion(functions);
-    if (version === undefined || version < STORE_VERSION) {
+    if (yield* needsPush(version)) {
       // Code without `state:version` is another app with the name of the store.
       if (version === undefined && deployment.lastDeployTime) {
         return yield* failure(
           `project ${STORE_PROJECT_NAME} (${project.id}) of team ${team} has code that is not the state store, and Convex.state does not push over it. Rename that project in the Convex dashboard.`,
         );
       }
-      // Another run can push a newer store in the meantime: read again right
-      // before the push. The push itself has no lock (see the design note).
+      // Another run can push a newer store, or the base app, in the meantime:
+      // read again right before the push. The push itself has no lock (see
+      // the design note).
       version = yield* storeVersion(functions);
-      if (version === undefined || version < STORE_VERSION) {
+      if (yield* needsPush(version)) {
         yield* pushStore(options, deployment);
         version = yield* storeVersion(functions);
       }
+    }
+    if (
+      version !== undefined &&
+      version < STORE_VERSION &&
+      (yield* storeHost(functions)) === "base"
+    ) {
+      return yield* new OutdatedBase({ team, deployment: deployment.name, version });
     }
     if (version !== STORE_VERSION) {
       return yield* failure(
@@ -445,7 +497,8 @@ export const makeConvexState = (options: StoreOptions) =>
  * in CONVEX_ACCESS_TOKEN or the Convex CLI login. A team access token names
  * its team, so `team` is optional with one; the Convex CLI login needs the
  * slug or the id. The first use of the run finds or creates the project and
- * pushes the store when it is missing or older. `alchemy plan` on another
+ * pushes the store app when the store is missing or an older seed. An older
+ * base fails the run with {@link OutdatedBase}. `alchemy plan` on another
  * stack never touches Convex.
  */
 export const state = (
