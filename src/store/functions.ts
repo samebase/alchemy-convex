@@ -193,20 +193,22 @@ export const readerFunctions = (alchemyState: ComponentApi) => ({
     returns: repositoryReply,
     handler: async (ctx) => {
       const identity = await ctx.auth.getUserIdentity();
+      // Custom claims are bracket reads: a base app compiles this file under its own tsconfig,
+      // which can set noPropertyAccessFromIndexSignature.
+      const scope = identity?.["scope"];
+      const repository = identity?.["repository"];
       // Only a token of the deployment's own issuer reads, the one that `authorize` signs: a base
       // can accept other providers too, and a token of one of those with the same claims does not.
       if (
         identity === null ||
         identity.issuer !== env.CONVEX_CLOUD_URL ||
-        identity.scope !== "alchemy:read" ||
-        typeof identity.repository !== "string" ||
-        !repositoryName.test(identity.repository)
+        scope !== "alchemy:read" ||
+        typeof repository !== "string" ||
+        !repositoryName.test(repository)
       ) {
         throw new Error("Alchemy repository read access is required.");
       }
-      return await ctx.runQuery(alchemyState.reader.repository, {
-        repository: identity.repository,
-      });
+      return await ctx.runQuery(alchemyState.reader.repository, { repository });
     },
   }),
 });
