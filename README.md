@@ -283,6 +283,24 @@ call.
     as the build inputs `["src/**", "public/**", "vite.config.ts"]`. A minted key for a command
     has every action, because the command can do more than a push.
 
+- `Convex.HubClient`: `{ team, app, redirectUri, deploymentType, clientName, softwareVersion? }`
+  registers one deployment as a client of the identity hub of the team. The hub is in the base of the
+  team, the production deployment of the project `samebase`. The resource finds it by name and runs
+  its internal function `identityBroker:registerClient` with a short-lived key, so the stack needs no
+  other credential and no hub address. The first client of an `app` creates the app. Outputs
+  `issuer`, `clientId`, `clientSecret`, `redirectUri`, `deploymentType`, and `clientName`, which the
+  `env` of the `Convex.Deployment` writes to the deployment. Another `redirectUri` is a new client, and
+  a destroy deletes the client.
+
+A development deployment has no stack, so the package has a command for it. Run it in the directory
+of the app, before the first push: it registers the deployment of that directory with
+`CONVEX_ACCESS_TOKEN` or the Convex CLI login, and writes `HUB_ISSUER`, `HUB_CLIENT_ID`, and
+`HUB_CLIENT_SECRET` to it. A deployment with all three variables keeps them.
+
+```sh
+npx alchemy-convex hub-client --team my-team --app scout --callback-path /auth/hub/callback
+```
+
 ## Data safety
 
 - `Convex.Project` and `Convex.Deployment` have the removal policy `retain`. `alchemy destroy`

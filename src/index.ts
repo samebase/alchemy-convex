@@ -18,6 +18,13 @@ export {
   type DeploymentProps,
   ProductionDeploymentNotFound,
 } from "./Deployment.ts";
+export {
+  HubClient,
+  type HubClientAttributes,
+  HubClientFailed,
+  type HubClientProps,
+  type HubDeploymentType,
+} from "./HubClient.ts";
 export { ConvexApiError, ManagementApi } from "./ManagementApi.ts";
 export {
   AmbiguousProject,
