@@ -12,6 +12,9 @@
   which the store pushes itself. Convex codegen writes `src/store/convex/_generated/` and
   `src/store/component/_generated/`. The store and its readers (Samebase) are released and upgraded
   together; a renamed function is a version bump on both sides. See `docs/design/convex-state.md`.
+- `alchemy-convex stack-comment` reads the store and writes a pull request comment. It reads Worker
+  and R2 rows of the store, and it depends on no Cloudflare package. GitHub removes most HTML, so
+  `src/StackComment.ts` names the reason for each choice of its markup.
 - The Convex CLI owns typecheck, codegen, bundling, and the code push. `Convex.Deployment` only runs
   the installed `convex deploy`. Do not move work of the Convex CLI into this package.
 - No backwards compatibility with earlier versions of this package, its store, or its data:

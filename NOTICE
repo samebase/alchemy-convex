@@ -8,6 +8,9 @@ packages/alchemy, under the ISC license:
 - the Convex CLI runner in src/Push.ts (internal/CommandRunner.ts),
 - the deployment lookup rules in src/Deployment.ts and the project listing in src/Project.ts.
 
+The Workers and R2 icons in assets/stack-comment are by Cloudflare, under CC BY 4.0
+(https://creativecommons.org/licenses/by/4.0/), with Cloudflare orange fill.
+
 ISC License
 
 Copyright 2024 RJ Dellecese
