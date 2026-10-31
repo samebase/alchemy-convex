@@ -1,3 +1,5 @@
+# Moved to [samebase/samebase](https://github.com/samebase/samebase/tree/main/packages/alchemy-convex)
+
 # @samebase/alchemy-convex
 
 The Convex plane for [Alchemy v2](https://alchemy.run): projects, deployments, their environment
