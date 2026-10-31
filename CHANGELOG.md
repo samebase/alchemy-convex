@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.18.0 (unreleased)
+
+The command `alchemy-convex stack-comment` keeps one comment on a pull request with a card for each
+stack of the repository at the stage of the pull request.
+
+- Run it as a step of a pull request workflow after every deploy. It needs `CONVEX_ACCESS_TOKEN`,
+  `GITHUB_TOKEN`, and the permission `pull-requests: write`. The run record gives it the repository
+  and the pull request.
+- A card shows the folder of the stack, its address, its last run, and its Convex deployments,
+  Workers, and R2 buckets. A stack without the stage of the pull request has no card.
+- Remove a `GitHub.Comment` from the stack. A comment that a stack declares can show only that stack.
+
 ## 0.17.0 (unreleased)
 
 The hub is the project `identity-hub`, a name that says what the project holds.

@@ -1,0 +1,223 @@
+[
+  {
+    "stack": "samebase/samebase/apps/samebase",
+    "stage": "pr-1829",
+    "rows": [
+      {
+        "status": "created",
+        "fqn": "Preview",
+        "logicalId": "Preview",
+        "instanceId": "f1ad2b177de45619a7af1506dcfb9352",
+        "resourceType": "Convex.Deployment",
+        "attr": {
+          "projectId": 839311,
+          "type": "preview",
+          "name": "adventurous-dog-484",
+          "reference": "preview/pr-1829",
+          "previewName": "pr-1829",
+          "url": "https://adventurous-dog-484.convex.cloud",
+          "siteUrl": "https://adventurous-dog-484.convex.site",
+          "envNames": []
+        },
+        "bindings": [],
+        "providerVersion": 0,
+        "downstream": [
+          "HubClient"
+        ],
+        "removalPolicy": "destroy",
+        "props": {
+          "rootDir": ".",
+          "type": "preview"
+        }
+      },
+      {
+        "status": "updated",
+        "fqn": "Project",
+        "logicalId": "Project",
+        "instanceId": "df8e20e8c82a3adf9c1c95823479782e",
+        "resourceType": "Convex.Project",
+        "attr": {
+          "projectId": 839311,
+          "slug": "samebase-com",
+          "name": "samebase-com",
+          "teamId": 38516,
+          "prodDeploymentName": "clear-butterfly-858",
+          "prodDeploymentUrl": "https://clear-butterfly-858.convex.cloud"
+        },
+        "bindings": [],
+        "providerVersion": 0,
+        "downstream": [
+          "Preview",
+          "Site"
+        ],
+        "removalPolicy": "retain",
+        "props": {}
+      },
+      {
+        "status": "updated",
+        "fqn": "Site",
+        "logicalId": "Site",
+        "instanceId": "181b851581b165d134d2574ed22ea2fa",
+        "resourceType": "Convex.Deployment",
+        "attr": {
+          "projectId": 839311,
+          "type": "preview",
+          "name": "adventurous-dog-484",
+          "reference": "preview/pr-1829",
+          "previewName": "pr-1829",
+          "url": "https://adventurous-dog-484.convex.cloud",
+          "siteUrl": "https://adventurous-dog-484.convex.site",
+          "hash": "3579aa52626c9fa41570d2a54a9c2555b1bddd818607cb527dfd1289e133d1b9",
+          "envNames": [
+            "HUB_CLIENT_ID",
+            "HUB_CLIENT_SECRET",
+            "HUB_ISSUER",
+            "SAMEBASE_COMMIT"
+          ]
+        },
+        "bindings": [],
+        "providerVersion": 0,
+        "downstream": [],
+        "removalPolicy": "destroy",
+        "props": {
+          "rootDir": ".",
+          "source": {
+            "path": "./convex",
+            "command": [
+              "node",
+              "./scripts/deploy-preview.ts"
+            ]
+          },
+          "type": "preview"
+        }
+      }
+    ],
+    "output": {
+      "url": "https://adventurous-dog-484.convex.site",
+      "samebase.run": {
+        "version": 1,
+        "repository": "samebase/samebase",
+        "stackFile": "apps/samebase/alchemy.run.ts",
+        "branch": "nicu-stack-comment",
+        "pullRequest": 1829,
+        "headCommit": "7b23daa0376fd09b18063c181d58ea11ca4840fc",
+        "runUrl": "https://github.com/samebase/samebase/actions/runs/41215316592/attempts/1",
+        "source": "github-actions",
+        "recordedAt": "2026-10-31T15:34:42.645Z"
+      }
+    }
+  },
+  {
+    "stack": "samebase/samebase/apps/sidebars-example",
+    "stage": "pr-1829",
+    "rows": [
+      {
+        "status": "updated",
+        "fqn": "Site",
+        "logicalId": "Site",
+        "instanceId": "d1fdbf58f744117e7936ca2f9f29f19d",
+        "resourceType": "Cloudflare.Worker",
+        "attr": {
+          "workerId": "d4cfd9c9f1a44b8ab84d39c35d5de88f",
+          "workerName": "samebase-monorepo-sidebars-example-pr-1829",
+          "logpush": false,
+          "url": "https://samebase-monorepo-sidebars-example-pr-1829.pfp.workers.dev",
+          "urls": [
+            "https://samebase-monorepo-sidebars-example-pr-1829.pfp.workers.dev"
+          ],
+          "tags": [
+            "alchemy:stack:samebase/samebase/apps/sidebars-example",
+            "alchemy:stage:pr-1829",
+            "alchemy:id:Site"
+          ],
+          "durableObjectNamespaces": {},
+          "accountId": "fe57d01d7ab41f60d00ba1aade20eb33",
+          "routes": [],
+          "crons": [],
+          "tailConsumers": [],
+          "versionId": "168bb84a-056f-4966-8c3f-3223353eea3b",
+          "deploymentId": "e140b12a-7bbe-4d17-871d-3a0b7d96d42d",
+          "hash": {
+            "assets": "756750d157f3266da089bf2c4d95298d264e4b239abc65e4b1a4242a4a55d7ee",
+            "metadata": "f00380bf83da1e1ce5959b6eb701087626c30f50edeb982b46e30b4eca187693"
+          }
+        },
+        "bindings": [],
+        "providerVersion": 0,
+        "downstream": [],
+        "removalPolicy": "destroy",
+        "providerMode": "live",
+        "props": {}
+      }
+    ],
+    "output": {
+      "url": "https://samebase-monorepo-sidebars-example-pr-1829.pfp.workers.dev",
+      "samebase.run": {
+        "version": 1,
+        "repository": "samebase/samebase",
+        "stackFile": "apps/sidebars-example/alchemy.run.ts",
+        "branch": "nicu-stack-comment",
+        "pullRequest": 1829,
+        "headCommit": "7b23daa0376fd09b18063c181d58ea11ca4840fc",
+        "runUrl": "https://github.com/samebase/samebase/actions/runs/41215316592/attempts/1",
+        "source": "github-actions",
+        "recordedAt": "2026-10-31T15:34:52.871Z"
+      }
+    }
+  },
+  {
+    "stack": "samebase/scout",
+    "stage": "prod",
+    "rows": [
+      {
+        "status": "updated",
+        "fqn": "DevelopmentWorkspaceBucket",
+        "logicalId": "DevelopmentWorkspaceBucket",
+        "instanceId": "2e7b5336f1dad3ddee4f6e0c957c2515",
+        "resourceType": "Cloudflare.R2.Bucket",
+        "attr": {
+          "bucketName": "scout-workspaces",
+          "storageClass": "Standard",
+          "jurisdiction": "default",
+          "location": "eeur",
+          "accountId": "fe57d01d7ab41f60d00ba1aade20eb33",
+          "domains": [],
+          "lifecycleRules": [
+            {
+              "id": "Default Multipart Abort Rule",
+              "enabled": true,
+              "prefix": "",
+              "abortMultipartUploadsTransition": {
+                "condition": {
+                  "type": "Age",
+                  "maxAge": 604800
+                }
+              }
+            }
+          ],
+          "cors": []
+        },
+        "bindings": [],
+        "providerVersion": 0,
+        "downstream": [],
+        "removalPolicy": "retain",
+        "providerMode": "live",
+        "props": {}
+      }
+    ],
+    "output": {
+      "url": "https://scout.samebase.com",
+      "samebase.run": {
+        "version": 1,
+        "repository": "samebase/scout",
+        "stackFile": "alchemy.run.ts",
+        "branch": "main",
+        "pullRequest": null,
+        "headCommit": "7879c6ecff3812020ad2d2ed76095ae241a92ee7",
+        "runUrl": "https://github.com/samebase/scout/actions/runs/41134713938/attempts/1",
+        "source": "github-actions",
+        "recordedAt": "2026-10-30T21:57:54.191Z"
+      }
+    }
+  }
+]

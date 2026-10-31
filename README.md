@@ -292,6 +292,33 @@ of the app, before the first push: it registers the deployment of that directory
 npx alchemy-convex hub-client --team my-team --app scout --callback-path /auth/hub/callback
 ```
 
+## Pull request comment
+
+`alchemy-convex stack-comment` keeps one comment on a pull request. The comment has a card for each
+stack of the repository at the stage `pr-<number>`: the folder, the address, the last run, and the
+Convex deployments, Workers, and R2 buckets. A stack sees only itself, so a comment that a stack
+declares cannot show this.
+
+Run it after every deploy of the workflow. The run record gives the repository and the pull request,
+so the command needs no argument with a team access token:
+
+```yaml
+permissions:
+  pull-requests: write
+
+steps:
+  # The deploy steps of each stack.
+  - name: Update the stack comment
+    if: github.event_name == 'pull_request'
+    run: pnpm exec alchemy-convex stack-comment
+    env:
+      CONVEX_ACCESS_TOKEN: ${{ secrets.CONVEX_ACCESS_TOKEN }}
+      GITHUB_TOKEN: ${{ github.token }}
+```
+
+A stack named `owner/name`, or `owner/name/<folder>` for a stack in a folder, belongs to the
+repository `owner/name`. A stack without the stage of the pull request has no card.
+
 ## Data safety
 
 - `Convex.Project` and `Convex.Deployment` have the removal policy `retain`. `alchemy destroy`
